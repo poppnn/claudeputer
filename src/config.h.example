@@ -1,0 +1,27 @@
+#pragma once
+// -----------------------------------------------------------------------------
+// Claudeputer configuration
+//
+// 1. Copy this file to "config.h"  (same folder)
+// 2. Fill in your WiFi credentials and Anthropic API key
+// 3. config.h is git-ignored, so your secrets never leave your machine
+// -----------------------------------------------------------------------------
+
+// --- WiFi ---
+#define WIFI_SSID       "your-wifi-ssid"
+#define WIFI_PASSWORD   "your-wifi-password"
+
+// --- Anthropic API key (https://console.anthropic.com/settings/keys) ---
+#define ANTHROPIC_API_KEY "sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+// --- Model & generation settings ---
+// Cheap & fast is best for a tiny screen. Other options:
+//   "claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"
+#define CLAUDE_MODEL    "claude-haiku-4-5"
+#define MAX_TOKENS      1024
+
+// System prompt — keep answers short, the screen is 240x135 px.
+#define SYSTEM_PROMPT   "You are Claude running on a tiny M5Stack Cardputer with a 240x135 screen. Keep answers concise and plain-text. Avoid markdown tables and long code blocks."
+
+// How many past turns (user+assistant pairs) to keep in context.
+#define MAX_HISTORY_TURNS 6
