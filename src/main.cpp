@@ -34,6 +34,7 @@
 #include <SPI.h>
 #include <time.h>
 #include <vector>
+#include <algorithm>
 #include <cstring>
 #include "anthropic_ca.h"
 
@@ -169,7 +170,7 @@ uint32_t g_lastIn = 0, g_lastOut = 0;     // last exchange
 // ---- Screens ----------------------------------------------------------------
 // Setup is split into 3 steps: pick a scanned WiFi -> type password -> import
 // the API key (web form / SD file / typing).
-enum class Screen { Scan, Pass, ApiKey, Chat, Model };
+enum class Screen { Scan, Pass, ApiKey, Chat, Model, Load };
 Screen g_screen = Screen::Chat;
 
 // ---- WiFi scan / setup ------------------------------------------------------
@@ -179,6 +180,11 @@ int    g_netSel = 0, g_netTop = 0;
 String g_selSsid;
 String g_passBuf;
 String g_apiBuf;
+
+// ---- Saved-conversation browser ---------------------------------------------
+struct SaveEntry { String path; String preview; };
+std::vector<SaveEntry> g_saves;
+int g_saveSel = 0, g_saveTop = 0;
 
 // ---- Model picker -----------------------------------------------------------
 static const char* MODELS[] = {
@@ -631,28 +637,116 @@ void saveConversation() {
   addMessage("info", "Saved " + path);
 }
 
-void loadConversation() {
-  if (!initSD()) { addMessage("info", "No SD card detected"); return; }
+// Scan /claudeputer for saved chats and grab a short preview (first user line).
+void scanSaves() {
+  g_saves.clear();
+  if (!initSD()) return;
 
-  String path;
-  char buf[40];
-  for (int n = 999; n >= 1; n--) {
-    snprintf(buf, sizeof(buf), "/claudeputer/chat-%03d.json", n);
-    if (SD.exists(buf)) { path = buf; break; }
+  std::vector<String> names;
+  File dir = SD.open("/claudeputer");
+  if (dir) {
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+      if (!f.isDirectory()) {
+        String base = f.name();
+        int sl = base.lastIndexOf('/');
+        if (sl >= 0) base = base.substring(sl + 1);
+        if (base.startsWith("chat-") && base.endsWith(".json")) names.push_back(base);
+      }
+      f.close();
+    }
+    dir.close();
   }
-  if (path.length() == 0) { addMessage("info", "No saved chats found"); return; }
+  std::sort(names.begin(), names.end());
 
+  for (auto& base : names) {
+    SaveEntry e;
+    e.path = "/claudeputer/" + base;
+    File f = SD.open(e.path, FILE_READ);
+    if (f) {
+      JsonDocument doc;
+      if (deserializeJson(doc, f) == DeserializationError::Ok) {
+        for (JsonObject o : doc.as<JsonArray>()) {
+          if (String((const char*)(o["role"] | "")) == "user") {
+            e.preview = String((const char*)(o["content"] | ""));
+            break;
+          }
+        }
+      }
+      f.close();
+    }
+    e.preview.replace('\n', ' ');
+    if (e.preview.length() > 22) e.preview = e.preview.substring(0, 22);
+    g_saves.push_back(e);
+  }
+  g_saveSel = 0;
+  g_saveTop = 0;
+}
+
+void loadFromPath(const String& path) {
   File f = SD.open(path, FILE_READ);
   if (!f) { addMessage("info", "SD read failed"); return; }
   JsonDocument doc;
   DeserializationError e = deserializeJson(doc, f);
   f.close();
   if (e) { addMessage("info", "Parse error in " + path); return; }
-
   g_msgs.clear();
   for (JsonObject o : doc.as<JsonArray>())
     addMessage(o["role"] | "assistant", String((const char*)(o["content"] | "")));
   addMessage("info", "Loaded " + path);
+}
+
+void renderLoad() {
+  canvas.fillScreen(C_BG);
+  setupHeader("Load conversation");
+  String cnt = String((int)g_saves.size());
+  canvas.setTextColor(C_MUTED);
+  canvas.setCursor(SCREEN_W - 5 - (int)cnt.length() * CHAR_W, 3);
+  canvas.print(cnt);
+
+  if (g_saves.empty()) {
+    canvas.setTextColor(C_MUTED);
+    const char* t = "No saved chats. Use /save.";
+    canvas.setCursor((SCREEN_W - (int)strlen(t) * CHAR_W) / 2, STATUS_H + 32);
+    canvas.print(t);
+    const char* h = "[`] back";
+    canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 9);
+    canvas.print(h);
+    canvas.pushSprite(0, 0);
+    return;
+  }
+
+  const int rowH = 14;
+  int top = STATUS_H + 4;
+  int rows = (SCREEN_H - 11 - top) / rowH;
+  if (g_saveSel < g_saveTop) g_saveTop = g_saveSel;
+  if (g_saveSel >= g_saveTop + rows) g_saveTop = g_saveSel - rows + 1;
+
+  for (int i = g_saveTop; i < (int)g_saves.size() && i < g_saveTop + rows; i++) {
+    int rowY = top + (i - g_saveTop) * rowH;
+    bool sel = (i == g_saveSel);
+    if (sel) canvas.fillRoundRect(4, rowY - 1, SCREEN_W - 8, rowH - 1, 4, C_INPUT_BG);
+    canvas.setTextColor(sel ? C_ACCENT : C_CLAUDE_TX);
+    canvas.setCursor(10, rowY + 2);
+    String num = g_saves[i].path;
+    int sl = num.lastIndexOf('/'); if (sl >= 0) num = num.substring(sl + 1);
+    num.replace("chat-", ""); num.replace(".json", "");
+    String label = num;
+    if (g_saves[i].preview.length()) label += "  " + g_saves[i].preview;
+    if (label.length() > 35) label = label.substring(0, 35);
+    canvas.print(label);
+  }
+
+  canvas.setTextColor(C_MUTED);
+  const char* h = "[;/.] move  [ENTER] load  [`] back";
+  canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 9);
+  canvas.print(h);
+  canvas.pushSprite(0, 0);
+}
+
+void startLoad() {
+  scanSaves();
+  g_screen = Screen::Load;
+  renderLoad();
 }
 
 // =============================================================================
@@ -898,7 +992,7 @@ void submitPrompt() {
   if (prompt == "/tokens") { g_input = ""; showTokens(); renderChat(); return; }
   if (prompt == "/model")  { g_input = ""; startModel(); return; }
   if (prompt == "/save")   { g_input = ""; saveConversation(); renderChat(); return; }
-  if (prompt == "/load")   { g_input = ""; loadConversation(); renderChat(); return; }
+  if (prompt == "/load")   { g_input = ""; startLoad(); return; }
   if (prompt == "/sd")     { g_input = ""; showSD(); renderChat(); return; }
   if (prompt == "/help")   { g_input = ""; showHelp(); renderChat(); return; }
 
@@ -1030,6 +1124,19 @@ void loop() {
       if (c == '`') { goChat(); return; }               // cancel
     }
     if (moved) renderModel();
+    return;
+  }
+
+  if (g_screen == Screen::Load) {
+    if (status.enter && !g_saves.empty()) { loadFromPath(g_saves[g_saveSel].path); goChat(); return; }
+    bool moved = false;
+    for (auto c : status.word) {
+      if (c == ';') { if (g_saveSel > 0) g_saveSel--;                       moved = true; }
+      if (c == '.') { if (g_saveSel < (int)g_saves.size() - 1) g_saveSel++; moved = true; }
+      if (c == '`') { goChat(); return; }                 // cancel
+    }
+    if (status.del) { goChat(); return; }                 // cancel
+    if (moved) renderLoad();
     return;
   }
 

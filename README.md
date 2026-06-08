@@ -103,7 +103,7 @@ Claude's on the left, with a status bar (WiFi + battery) on top, a thin
 | `/tokens`      | Show token usage (in/out, session, cost) |
 | `/model`       | Pick the Claude model (saved to NVS)     |
 | `/save`        | Save the conversation to microSD         |
-| `/load`        | Load the most recent saved conversation  |
+| `/load`        | Browse saved conversations and pick one  |
 | `/sd`          | Show microSD status                      |
 | `/help`        | List all commands                        |
 
@@ -114,7 +114,9 @@ New replies auto-scroll to the bottom. Conversation history is kept
 `ENTER` to confirm (`` ` `` cancels). The choice persists across reboots.
 
 **Save to SD** (`/save`, `/load`): conversations are stored as JSON under
-`/claudeputer/chat-NNN.json` on the microSD card. `/load` restores the latest.
+`/claudeputer/chat-NNN.json` on the microSD card. `/load` opens a browser —
+scroll the saved chats (with a preview of the first message) using `;`/`.` and
+press `ENTER` to load the one you want (`` ` `` cancels).
 
 **Token usage:** the bar fills as you spend tokens this session (relative to
 `TOKEN_BUDGET`), turning red near the limit. `/tokens` prints exact input/output
@@ -164,7 +166,6 @@ TLS certificate validation (embedded roots + NTP) · on-screen `/model` picker �
 Next:
 - [ ] Multi-line input + cursor editing
 - [ ] On-screen `max_tokens` / system-prompt settings
-- [ ] Browse & pick which saved conversation to load
 - [ ] Use the ADV's extras (IMU, mic, speaker, IR)
 
 ---
