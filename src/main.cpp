@@ -166,6 +166,9 @@ unsigned long g_lastBlink = 0;
 // ---- Token accounting -------------------------------------------------------
 uint32_t g_sessIn = 0, g_sessOut = 0;     // session totals
 uint32_t g_lastIn = 0, g_lastOut = 0;     // last exchange
+// Rate-limit "remaining" from the last response headers (closest thing the API
+// exposes to "credits left" -- it's the per-window allowance, not a $ balance).
+String g_rlReqRem, g_rlTokRem, g_rlInRem, g_rlOutRem, g_rlReset;
 
 // ---- Screens ----------------------------------------------------------------
 // Setup is split into 3 steps: pick a scanned WiFi -> type password -> import
@@ -528,6 +531,22 @@ void showTokens() {
   s += "Total: in " + String(g_sessIn) + "  out " + String(g_sessOut) + "\n";
   s += "Used:  " + String(tot) + " / " + String((uint32_t)TOKEN_BUDGET) + "\n";
   s += "Est. cost ~$" + String(cost, 4);
+
+  // "Credits remaining": the API only exposes rate-limit allowance (per window),
+  // not an account $ balance. Show what the last response reported.
+  if (g_rlTokRem.length() || g_rlReqRem.length()) {
+    s += "\n--- API remaining ---";
+    if (g_rlReqRem.length()) s += "\nrequests: " + g_rlReqRem;
+    if (g_rlTokRem.length()) s += "\ntokens: " + g_rlTokRem;
+    if (g_rlInRem.length() || g_rlOutRem.length())
+      s += "\n(in " + g_rlInRem + " / out " + g_rlOutRem + ")";
+    int tpos = g_rlReset.indexOf('T');
+    if (tpos >= 0 && (int)g_rlReset.length() >= tpos + 6)
+      s += "\nresets " + g_rlReset.substring(tpos + 1, tpos + 6) + "Z";
+    s += "\n(rate-limit window, not $ balance)";
+  } else {
+    s += "\nAPI remaining: send a message first";
+  }
   addMessage("info", s);
 }
 
@@ -832,7 +851,24 @@ bool streamClaude(String& err) {
   https.addHeader("x-api-key", g_cfg.apiKey);
   https.addHeader("anthropic-version", "2023-06-01");
 
+  // Ask HTTPClient to keep the rate-limit headers so we can show "remaining".
+  static const char* RL_HEADERS[] = {
+    "anthropic-ratelimit-requests-remaining",
+    "anthropic-ratelimit-tokens-remaining",
+    "anthropic-ratelimit-input-tokens-remaining",
+    "anthropic-ratelimit-output-tokens-remaining",
+    "anthropic-ratelimit-tokens-reset",
+  };
+  https.collectHeaders(RL_HEADERS, sizeof(RL_HEADERS) / sizeof(RL_HEADERS[0]));
+
   int code = https.POST(body);
+  if (code == 200) {
+    g_rlReqRem = https.header("anthropic-ratelimit-requests-remaining");
+    g_rlTokRem = https.header("anthropic-ratelimit-tokens-remaining");
+    g_rlInRem  = https.header("anthropic-ratelimit-input-tokens-remaining");
+    g_rlOutRem = https.header("anthropic-ratelimit-output-tokens-remaining");
+    g_rlReset  = https.header("anthropic-ratelimit-tokens-reset");
+  }
   if (code != 200) {
     String resp = https.getString();
     JsonDocument e;

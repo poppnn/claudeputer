@@ -124,6 +124,12 @@ counts and an estimated cost — set `PRICE_*_PER_MTOK` in `config.h` to match y
 model (defaults are Claude Haiku 4.5: in $1 / out $5 per 1M tokens). Default
 model is `claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
 
+`/tokens` also shows your **remaining API allowance** — the requests/tokens left
+in the current rate-limit window, read from the `anthropic-ratelimit-*-remaining`
+response headers. Note: the API key cannot fetch your account **dollar balance**
+(that needs an Admin key + the org usage API), so this is the per-window
+allowance, not money left.
+
 ---
 
 ## How it works
