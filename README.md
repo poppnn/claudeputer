@@ -76,8 +76,9 @@ To reconfigure later: type `/setup` + `ENTER`, **or** hold **G0** while powering
 ## Usage
 
 A single chat view: your messages appear as orange bubbles on the right,
-Claude's on the left, with a status bar (WiFi + battery) on top and a rounded
-input bar at the bottom. Errors and the "thinking" state show inline.
+Claude's on the left, with a status bar (WiFi + battery) on top, a thin
+**token-usage bar** under it, and a rounded input bar at the bottom. Replies
+**stream in live** (token by token). Errors and the "typing" state show inline.
 
 | Key            | Action                                   |
 |----------------|------------------------------------------|
@@ -87,10 +88,16 @@ input bar at the bottom. Errors and the "thinking" state show inline.
 | `Fn` + `;`/`.` | Scroll the transcript up / down          |
 | `/setup`       | Reconfigure WiFi / API key               |
 | `/reset`       | Clear the conversation                   |
+| `/tokens`      | Show token usage (in/out, session, cost) |
 
 New replies auto-scroll to the bottom. Conversation history is kept
-(`MAX_HISTORY_TURNS` turns) so Claude has context. Default model is
-`claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
+(`MAX_HISTORY_TURNS` turns) so Claude has context.
+
+**Token usage:** the bar fills as you spend tokens this session (relative to
+`TOKEN_BUDGET`), turning red near the limit. `/tokens` prints exact input/output
+counts and an estimated cost — set `PRICE_*_PER_MTOK` in `config.h` to match your
+model (defaults are Claude Haiku 4.5: in $1 / out $5 per 1M tokens). Default
+model is `claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
 
 ---
 

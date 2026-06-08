@@ -32,3 +32,13 @@
 
 // How many past turns (user+assistant pairs) to keep in context.
 #define MAX_HISTORY_TURNS 6
+
+// --- Token usage tracking ---
+// How many session tokens fill the thin usage bar under the status bar.
+#define TOKEN_BUDGET 100000
+
+// Approximate USD price per 1M tokens, used only for the /tokens cost estimate.
+// Defaults below are Claude Haiku 4.5. Update to match your CLAUDE_MODEL:
+//   Haiku 4.5  ~ in 1 / out 5      Sonnet ~ in 3 / out 15
+#define PRICE_IN_PER_MTOK  1.0
+#define PRICE_OUT_PER_MTOK 5.0

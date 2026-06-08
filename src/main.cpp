@@ -7,9 +7,9 @@
 //  runs on either device.
 //
 //  UI: a chat view with message bubbles (you on the right, Claude on the left),
-//  a status bar (WiFi + battery), and a rounded input bar with a blinking
-//  cursor. Everything is composed off-screen on a PSRAM sprite for flicker-free
-//  rendering.
+//  a status bar (WiFi + battery), a thin token-usage bar, and a rounded input
+//  bar with a blinking cursor. Everything is composed off-screen on a PSRAM
+//  sprite for flicker-free rendering. Replies stream in token-by-token (SSE).
 //
 //  Configuration (WiFi + Anthropic API key) can come from:
 //    1. On-device setup wizard -> stored in NVS (Preferences)   [web-flash]
@@ -20,6 +20,7 @@
 //    type ........... write a prompt        ENTER ... send
 //    DEL ............ backspace             Fn + ; / . scroll transcript
 //    "/setup" ....... reconfigure WiFi/key  "/reset" . clear conversation
+//    "/tokens" ...... show token usage + estimated cost
 // =============================================================================
 
 #include <M5Cardputer.h>
@@ -29,6 +30,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <vector>
+#include <cstring>
 
 // config.h is optional (git-ignored). Without it we fall back to empty values
 // and the on-device setup wizard handles configuration.
@@ -56,6 +58,18 @@
 #ifndef MAX_HISTORY_TURNS
   #define MAX_HISTORY_TURNS 6
 #endif
+// Token-usage bar: how many session tokens fill the bar.
+#ifndef TOKEN_BUDGET
+  #define TOKEN_BUDGET 100000
+#endif
+// Approximate USD pricing per 1M tokens (default = Claude Haiku 4.5). Adjust to
+// match your model in config.h. Used only for the /tokens cost estimate.
+#ifndef PRICE_IN_PER_MTOK
+  #define PRICE_IN_PER_MTOK  1.0
+#endif
+#ifndef PRICE_OUT_PER_MTOK
+  #define PRICE_OUT_PER_MTOK 5.0
+#endif
 
 // ---- Geometry (Font0 glyphs are 6x8 px) -------------------------------------
 static const int SCREEN_W  = 240;
@@ -63,9 +77,11 @@ static const int SCREEN_H  = 135;
 static const int CHAR_W    = 6;
 static const int LINE_H    = 9;
 static const int STATUS_H  = 14;
+static const int TOKBAR_Y  = STATUS_H + 1;
+static const int TOKBAR_H  = 2;
 static const int INPUT_H   = 18;
-static const int CHAT_TOP  = STATUS_H + 1;
-static const int CHAT_H    = SCREEN_H - STATUS_H - INPUT_H - 2;
+static const int CHAT_TOP  = TOKBAR_Y + TOKBAR_H + 1;          // 18
+static const int CHAT_H    = SCREEN_H - CHAT_TOP - INPUT_H - 1;
 static const int BUB_PAD   = 4;
 static const int BUB_GAP   = 5;
 static const int BUB_RAD   = 5;
@@ -84,6 +100,7 @@ constexpr uint16_t C_USER_BUB  = rgb565(217, 119,   6);
 constexpr uint16_t C_USER_TX   = rgb565( 26,  16,   2);
 constexpr uint16_t C_CLAUDE_BUB= rgb565( 38,  38,  46);
 constexpr uint16_t C_CLAUDE_TX = rgb565(242, 242, 247);
+constexpr uint16_t C_INFO_TX   = rgb565(150, 200, 255);
 constexpr uint16_t C_ERR_BUB   = rgb565( 70,  22,  22);
 constexpr uint16_t C_ERR_TX    = rgb565(255, 120, 120);
 constexpr uint16_t C_INPUT_BG  = rgb565( 30,  30,  38);
@@ -117,13 +134,17 @@ void saveConfig() {
 bool configComplete() { return g_cfg.ssid.length() > 0 && g_cfg.apiKey.length() > 0; }
 
 // ---- Conversation -----------------------------------------------------------
-struct Msg { String role; String content; };   // role: user | assistant | error
+struct Msg { String role; String content; };   // role: user | assistant | error | info
 std::vector<Msg> g_msgs;
 
 String g_input;
 int    g_scrollPx   = 1 << 20;     // large => clamp to bottom
 bool   g_cursorOn   = true;
 unsigned long g_lastBlink = 0;
+
+// ---- Token accounting -------------------------------------------------------
+uint32_t g_sessIn = 0, g_sessOut = 0;     // session totals
+uint32_t g_lastIn = 0, g_lastOut = 0;     // last exchange
 
 // ---- Setup wizard -----------------------------------------------------------
 enum class Screen { Setup, Chat };
@@ -173,13 +194,13 @@ std::vector<String> wrapText(const String& text, int maxChars) {
 }
 
 // =============================================================================
-//  Status bar widgets
+//  Status bar + token bar widgets
 // =============================================================================
 void drawBattery(int x, int y) {
   const int w = 16, h = 8;
   int level = (int)M5.Power.getBatteryLevel();
   canvas.drawRoundRect(x, y, w, h, 2, C_MUTED);
-  canvas.fillRect(x + w, y + 2, 2, h - 4, C_MUTED);           // positive nub
+  canvas.fillRect(x + w, y + 2, 2, h - 4, C_MUTED);
   if (level >= 0) {
     if (level > 100) level = 100;
     int fw = ((w - 2) * level) / 100;
@@ -197,6 +218,16 @@ void drawWifi(int x, int y) {
   }
 }
 
+void drawTokenBar() {
+  canvas.fillRect(0, TOKBAR_Y, SCREEN_W, TOKBAR_H, C_STATUS);
+  uint32_t used = g_sessIn + g_sessOut;
+  if (used == 0) return;
+  float frac = (float)used / (float)TOKEN_BUDGET;
+  if (frac > 1.0f) frac = 1.0f;
+  int w = (int)(SCREEN_W * frac);
+  canvas.fillRect(0, TOKBAR_Y, w, TOKBAR_H, frac > 0.9f ? C_LOWBAT : C_ACCENT);
+}
+
 void drawStatusBar() {
   canvas.fillRect(0, 0, SCREEN_W, STATUS_H, C_STATUS);
   canvas.drawFastHLine(0, STATUS_H, SCREEN_W, C_DIM);
@@ -205,6 +236,7 @@ void drawStatusBar() {
   canvas.print(boardName());
   drawBattery(SCREEN_W - 4 - 18, 3);
   drawWifi(SCREEN_W - 4 - 18 - 6 - 16, 3);
+  drawTokenBar();
 }
 
 // =============================================================================
@@ -213,7 +245,6 @@ void drawStatusBar() {
 struct Laid { const Msg* m; std::vector<String> lines; int w, h, x; };
 
 void drawChat() {
-  // Lay out every bubble once.
   std::vector<Laid> items;
   int total = 0;
   for (const auto& m : g_msgs) {
@@ -249,6 +280,7 @@ void drawChat() {
       uint16_t bub, tx;
       if      (L.m->role == "user")  { bub = C_USER_BUB;   tx = C_USER_TX; }
       else if (L.m->role == "error") { bub = C_ERR_BUB;    tx = C_ERR_TX; }
+      else if (L.m->role == "info")  { bub = C_STATUS;     tx = C_INFO_TX; }
       else                           { bub = C_CLAUDE_BUB; tx = C_CLAUDE_TX; }
       canvas.fillRoundRect(L.x, y, L.w, L.h, BUB_RAD, bub);
       canvas.setTextColor(tx);
@@ -259,7 +291,6 @@ void drawChat() {
   }
   canvas.clearClipRect();
 
-  // Scroll-up hint when more content sits above the view.
   if (g_scrollPx < maxScroll) {
     canvas.fillTriangle(SCREEN_W - 9, CHAT_TOP + CHAT_H - 4,
                         SCREEN_W - 5, CHAT_TOP + CHAT_H - 9,
@@ -270,16 +301,16 @@ void drawChat() {
 // =============================================================================
 //  Input bar
 // =============================================================================
-void drawInputBar(bool thinking) {
+void drawInputBar(bool busy) {
   int iy = SCREEN_H - INPUT_H + 1;
   canvas.fillRoundRect(3, iy, SCREEN_W - 6, INPUT_H - 2, 5, C_INPUT_BG);
   int tx = 8;
   int ty = iy + (INPUT_H - 2 - 8) / 2;
 
-  if (thinking) {
+  if (busy) {
     canvas.setTextColor(C_ACCENT);
     canvas.setCursor(tx, ty);
-    canvas.print("Claude is thinking...");
+    canvas.print("Claude is typing...");
     return;
   }
 
@@ -298,11 +329,11 @@ void drawInputBar(bool thinking) {
 // =============================================================================
 //  Full-screen composers
 // =============================================================================
-void renderChat(bool thinking = false) {
+void renderChat(bool busy = false) {
   canvas.fillScreen(C_BG);
   drawStatusBar();
   drawChat();
-  drawInputBar(thinking);
+  drawInputBar(busy);
   canvas.pushSprite(0, 0);
 }
 
@@ -341,7 +372,6 @@ void renderSetup() {
   canvas.pushSprite(0, 0);
 }
 
-// A centered status card (used while connecting to WiFi).
 void renderCard(const String& title, const String& line, uint16_t titleColor) {
   canvas.fillScreen(C_BG);
   drawStatusBar();
@@ -357,13 +387,23 @@ void renderCard(const String& title, const String& line, uint16_t titleColor) {
 }
 
 // =============================================================================
-//  Messages helpers
+//  Message helpers
 // =============================================================================
 void addMessage(const char* role, const String& content) {
   g_msgs.push_back({role, content});
-  // Bound memory / render cost.
-  while (g_msgs.size() > (size_t)(MAX_HISTORY_TURNS * 2 + 4)) g_msgs.erase(g_msgs.begin());
-  g_scrollPx = 1 << 20;   // jump to bottom on new content
+  while (g_msgs.size() > (size_t)(MAX_HISTORY_TURNS * 2 + 6)) g_msgs.erase(g_msgs.begin());
+  g_scrollPx = 1 << 20;
+}
+
+void showTokens() {
+  uint32_t tot = g_sessIn + g_sessOut;
+  double cost = (g_sessIn / 1e6) * PRICE_IN_PER_MTOK + (g_sessOut / 1e6) * PRICE_OUT_PER_MTOK;
+  String s  = "Token usage\n";
+  s += "Last:  in " + String(g_lastIn) + "  out " + String(g_lastOut) + "\n";
+  s += "Total: in " + String(g_sessIn) + "  out " + String(g_sessOut) + "\n";
+  s += "Used:  " + String(tot) + " / " + String((uint32_t)TOKEN_BUDGET) + "\n";
+  s += "Est. cost ~$" + String(cost, 4);
+  addMessage("info", s);
 }
 
 // =============================================================================
@@ -390,17 +430,23 @@ bool connectWiFi() {
 }
 
 // =============================================================================
-//  Anthropic API
+//  Anthropic API -- streaming (Server-Sent Events)
+//
+//  Updates the trailing assistant bubble (g_msgs.back()) as text arrives.
+//  Returns false and fills `err` on failure.
 // =============================================================================
-bool askClaude(String& out) {
+bool streamClaude(String& err) {
   JsonDocument doc;
   doc["model"]      = g_cfg.model;
   doc["max_tokens"] = MAX_TOKENS;
   doc["system"]     = SYSTEM_PROMPT;
+  doc["stream"]     = true;
 
   JsonArray messages = doc["messages"].to<JsonArray>();
-  bool started = false;                       // first message must be "user"
-  for (const auto& m : g_msgs) {
+  bool started = false;
+  for (size_t i = 0; i < g_msgs.size(); i++) {
+    const Msg& m = g_msgs[i];
+    if (i + 1 == g_msgs.size()) break;             // skip trailing empty placeholder
     if (m.role != "user" && m.role != "assistant") continue;
     if (!started && m.role != "user") continue;
     started = true;
@@ -414,36 +460,76 @@ bool askClaude(String& out) {
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(20000);
+  client.setTimeout(25000);
 
   HTTPClient https;
   https.setReuse(false);
-  if (!https.begin(client, "https://api.anthropic.com/v1/messages")) { out = "https.begin() failed"; return false; }
+  https.setTimeout(25000);
+  if (!https.begin(client, "https://api.anthropic.com/v1/messages")) { err = "connection failed"; return false; }
   https.addHeader("content-type", "application/json");
   https.addHeader("x-api-key", g_cfg.apiKey);
   https.addHeader("anthropic-version", "2023-06-01");
 
   int code = https.POST(body);
-  String resp = https.getString();
-  https.end();
-
   if (code != 200) {
-    JsonDocument err;
-    if (deserializeJson(err, resp) == DeserializationError::Ok && err["error"]["message"].is<const char*>())
-      out = "HTTP " + String(code) + ": " + err["error"]["message"].as<String>();
+    String resp = https.getString();
+    JsonDocument e;
+    if (deserializeJson(e, resp) == DeserializationError::Ok && e["error"]["message"].is<const char*>())
+      err = "HTTP " + String(code) + ": " + e["error"]["message"].as<String>();
     else
-      out = "HTTP " + String(code) + " (" + resp.substring(0, 120) + ")";
+      err = "HTTP " + String(code);
+    https.end();
     return false;
   }
 
-  JsonDocument res;
-  if (deserializeJson(res, resp)) { out = "JSON parse error"; return false; }
+  WiFiClient* stream = https.getStreamPtr();
+  String acc;
+  unsigned long lastData = millis();
+  unsigned long lastRender = 0;
+  bool done = false;
 
-  String text;
-  for (JsonObject block : res["content"].as<JsonArray>())
-    if (block["type"] == "text") text += block["text"].as<String>();
-  if (text.length() == 0) text = "(empty response)";
-  out = text;
+  while (https.connected() && !done && (millis() - lastData < 25000)) {
+    while (stream->available()) {
+      String line = stream->readStringUntil('\n');
+      lastData = millis();
+      line.trim();
+      if (!line.startsWith("data:")) continue;
+      String js = line.substring(5);
+      js.trim();
+
+      JsonDocument ev;
+      if (deserializeJson(ev, js)) continue;
+      const char* t = ev["type"] | "";
+
+      if (strcmp(t, "content_block_delta") == 0) {
+        if (ev["delta"]["type"] == "text_delta") {
+          acc += ev["delta"]["text"].as<String>();
+          g_msgs.back().content = acc;
+          if (millis() - lastRender > 90) { g_scrollPx = 1 << 20; renderChat(true); lastRender = millis(); }
+        }
+      } else if (strcmp(t, "message_start") == 0) {
+        g_lastIn = ev["message"]["usage"]["input_tokens"] | 0;
+      } else if (strcmp(t, "message_delta") == 0) {
+        g_lastOut = ev["usage"]["output_tokens"] | g_lastOut;
+      } else if (strcmp(t, "message_stop") == 0) {
+        done = true;
+        break;
+      } else if (strcmp(t, "error") == 0) {
+        err = String((const char*)(ev["error"]["message"] | "stream error"));
+        https.end();
+        return false;
+      }
+    }
+    M5Cardputer.update();
+    delay(2);
+  }
+  https.end();
+
+  if (acc.length() == 0) { err = "no response received"; return false; }
+  g_msgs.back().content = acc;
+  g_sessIn  += g_lastIn;
+  g_sessOut += g_lastOut;
+  g_scrollPx = 1 << 20;
   return true;
 }
 
@@ -456,8 +542,7 @@ void startSetup() {
   g_setupBuf   = g_cfg.ssid;
   renderSetup();
 }
-// Returns true when the wizard is finished.
-bool setupAdvance() {
+bool setupAdvance() {                       // returns true when finished
   switch (g_setupField) {
     case 0: g_cfg.ssid   = g_setupBuf; break;
     case 1: g_cfg.pass   = g_setupBuf; break;
@@ -483,16 +568,20 @@ void submitPrompt() {
   prompt.trim();
   if (prompt.length() == 0) return;
 
-  if (prompt == "/setup") { g_input = ""; startSetup(); return; }
-  if (prompt == "/reset") { g_msgs.clear(); g_input = ""; renderChat(); return; }
+  if (prompt == "/setup")  { g_input = ""; startSetup(); return; }
+  if (prompt == "/reset")  { g_msgs.clear(); g_input = ""; renderChat(); return; }
+  if (prompt == "/tokens") { g_input = ""; showTokens(); renderChat(); return; }
 
   g_input = "";
   addMessage("user", prompt);
-  renderChat(true);                 // show the prompt + "thinking" bar
+  addMessage("assistant", "");        // placeholder the stream fills in
+  renderChat(true);
 
-  String reply;
-  bool ok = askClaude(reply);
-  addMessage(ok ? "assistant" : "error", reply);
+  String err;
+  if (!streamClaude(err)) {
+    g_msgs.back().role    = "error";
+    g_msgs.back().content = err.length() ? err : "request failed";
+  }
   renderChat();
 }
 
@@ -521,7 +610,6 @@ void setup() {
 void loop() {
   M5Cardputer.update();
 
-  // Blink the input cursor without keypresses.
   unsigned long now = millis();
   if (now - g_lastBlink > 530) {
     g_cursorOn  = !g_cursorOn;
@@ -532,11 +620,11 @@ void loop() {
 
   if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) { delay(5); return; }
   Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
-  g_cursorOn = true;                // keep cursor solid while typing
+  g_cursorOn = true;
 
   if (g_screen == Screen::Setup) {
     if (status.enter) {
-      if (setupAdvance()) {         // finished
+      if (setupAdvance()) {
         g_msgs.clear();
         if (connectWiFi()) goChat();
         else { addMessage("error", "WiFi failed. Type /setup to retry."); goChat(); }
@@ -553,8 +641,7 @@ void loop() {
   if (status.enter) { submitPrompt(); return; }
   if (status.del && g_input.length() > 0) { g_input.remove(g_input.length() - 1); renderChat(); return; }
 
-  // Fn + ; / .  scrolls the transcript (those keys still type normally).
-  if (status.fn) {
+  if (status.fn) {                          // Fn + ; / . scrolls the transcript
     bool scrolled = false;
     for (auto c : status.word) {
       if (c == ';') { g_scrollPx -= LINE_H * 2; scrolled = true; }
