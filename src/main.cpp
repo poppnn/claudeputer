@@ -1,5 +1,5 @@
 // =============================================================================
-//  Claudeputer — talk to Claude from an M5Stack Cardputer over WiFi
+//  Claudeputer -- talk to Claude from an M5Stack Cardputer over WiFi
 //
 //  Works on BOTH the Cardputer 1.1 and the Cardputer ADV: the M5Cardputer
 //  library (>= 1.2.0) auto-detects the board via M5.getBoard() and selects the
@@ -68,7 +68,7 @@ static const int   BODY_ROWS  = (SCREEN_H - HEADER_H) / LINE_H;
 #define COL_USER    TFT_GREENYELLOW
 #define COL_CLAUDE  TFT_WHITE
 #define COL_ACCENT  0xFD20
-#define COL_ERROR   TFT_RED
+#define COL_ERR     TFT_RED
 
 // ---- Runtime configuration --------------------------------------------------
 Preferences g_prefs;
@@ -110,9 +110,11 @@ String g_input;
 String g_lastReply;
 int    g_scroll = 0;
 
-// ---- Setup wizard state -----------------------------------------------------
-enum class Screen { SETUP, INPUT, THINKING, VIEW, ERROR };
-Screen g_screen = Screen::INPUT;
+// ---- Screen state -----------------------------------------------------------
+// NOTE: enum values are PascalCase on purpose -- INPUT/OUTPUT/ERROR are Arduino
+// macros and would break the enum at the preprocessor level.
+enum class Screen { Setup, Input, Thinking, View, Error };
+Screen g_screen = Screen::Input;
 
 int    g_setupField = 0;           // 0 = SSID, 1 = password, 2 = API key
 String g_setupBuf;
@@ -256,8 +258,8 @@ void renderView() {
 void renderError(const String& msg) {
   auto& d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("Error  [`] back", COL_ERROR);
-  d.setTextColor(COL_ERROR, COL_BG);
+  drawHeader("Error  [`] back", COL_ERR);
+  d.setTextColor(COL_ERR, COL_BG);
   std::vector<String> lines = wrapText(msg, COLS);
   int y = HEADER_H + 2;
   for (int i = 0; i < (int)lines.size() && i < BODY_ROWS; i++) {
@@ -271,7 +273,7 @@ void renderError(const String& msg) {
 //  Setup wizard
 // =============================================================================
 void startSetup() {
-  g_screen     = Screen::SETUP;
+  g_screen     = Screen::Setup;
   g_setupField = 0;
   g_setupBuf   = g_cfg.ssid;          // prefill with current value
   renderSetup();
@@ -292,7 +294,7 @@ void setupAdvance() {
     return;
   }
 
-  // Finished: persist and (re)connect.
+  // Finished: persist and clear stale context.
   saveConfig();
   g_history.clear();
 }
@@ -407,7 +409,7 @@ void trimHistory() {
 //  Main flow
 // =============================================================================
 void goInput() {
-  g_screen = Screen::INPUT;
+  g_screen = Screen::Input;
   renderInput();
 }
 
@@ -423,12 +425,12 @@ void submitPrompt() {
     g_input = "";
     g_lastReply = "Conversation history cleared.";
     g_scroll = 0;
-    g_screen = Screen::VIEW;
+    g_screen = Screen::View;
     renderView();
     return;
   }
 
-  g_screen = Screen::THINKING;
+  g_screen = Screen::Thinking;
   renderThinking();
 
   String reply;
@@ -439,10 +441,10 @@ void submitPrompt() {
     g_input     = "";
     g_lastReply = reply;
     g_scroll    = 0;
-    g_screen    = Screen::VIEW;
+    g_screen    = Screen::View;
     renderView();
   } else {
-    g_screen = Screen::ERROR;
+    g_screen = Screen::Error;
     renderError(reply);
   }
 }
@@ -462,11 +464,11 @@ void setup() {
 
   if (forceSetup || !configComplete()) {
     startSetup();
-    return;          // setup loop() handles connecting afterwards
+    return;          // the loop() handles connecting after the wizard
   }
 
   if (!connectWiFi()) {
-    g_screen = Screen::ERROR;
+    g_screen = Screen::Error;
     renderError("WiFi connection failed. Type /setup after this, or check credentials. [`] to continue.");
     return;
   }
@@ -484,12 +486,12 @@ void loop() {
   Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
 
   switch (g_screen) {
-    case Screen::SETUP: {
+    case Screen::Setup: {
       if (status.enter) {
         setupAdvance();
         if (g_setupField > 2) {            // wizard finished
           if (connectWiFi()) goInput();
-          else { g_screen = Screen::ERROR; renderError("WiFi failed. Type /setup to retry. [`] continue."); }
+          else { g_screen = Screen::Error; renderError("WiFi failed. Type /setup to retry. [`] continue."); }
         }
         break;
       }
@@ -499,7 +501,7 @@ void loop() {
       break;
     }
 
-    case Screen::INPUT: {
+    case Screen::Input: {
       if (status.enter) { submitPrompt(); break; }
       if (status.del && g_input.length() > 0) g_input.remove(g_input.length() - 1);
       for (auto c : status.word) g_input += c;
@@ -507,7 +509,7 @@ void loop() {
       break;
     }
 
-    case Screen::VIEW: {
+    case Screen::View: {
       bool changed = false;
       for (auto c : status.word) {
         if (c == '`') { goInput(); return; }
@@ -519,12 +521,12 @@ void loop() {
       break;
     }
 
-    case Screen::ERROR: {
+    case Screen::Error: {
       for (auto c : status.word) if (c == '`') { goInput(); return; }
       break;
     }
 
-    case Screen::THINKING:
+    case Screen::Thinking:
     default:
       break;
   }
