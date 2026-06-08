@@ -94,10 +94,12 @@ Claude's on the left, with a status bar (WiFi + battery) on top, a thin
 
 | Key            | Action                                   |
 |----------------|------------------------------------------|
-| *(type)*       | Write your prompt                        |
+| *(type)*       | Insert text at the cursor                |
 | `ENTER`        | Send to Claude                           |
-| `DEL`          | Backspace                                |
-| `;` / `.` (arrows) | Scroll transcript up / down (when input is empty; or `Fn`+arrow while typing) |
+| `Shift`+`ENTER`| Insert a new line (multi-line prompt)    |
+| `DEL`          | Delete the character before the cursor   |
+| `Fn`+`,` / `Fn`+`/` (←/→) | Move the edit cursor left / right |
+| `Fn`+`;` / `Fn`+`.` (↑/↓) | Scroll the transcript (or plain `;`/`.` when input is empty) |
 | `/setup`       | Reconfigure WiFi / API key               |
 | `/reset`       | Clear the conversation                   |
 | `/tokens`      | Show token usage (in/out, session, cost) |
@@ -167,11 +169,11 @@ page. On every push to `main`, the workflow in
 
 Done: chat-bubble UI · streaming replies · token usage bar + `/tokens` ·
 TLS certificate validation (embedded roots + NTP) · on-screen `/model` picker ·
-`/save` & `/load` to microSD.
+`/save` & `/load` browser to microSD · multi-line input with cursor editing.
 
 Next:
-- [ ] Multi-line input + cursor editing
 - [ ] On-screen `max_tokens` / system-prompt settings
+- [ ] Voice dictation (mic + a speech-to-text API)
 - [ ] Use the ADV's extras (IMU, mic, speaker, IR)
 
 ---

@@ -17,10 +17,10 @@
 //  NVS values take priority. If nothing is configured, setup opens.
 //
 //  Controls (chat):
-//    type ........... write a prompt        ENTER ... send
-//    DEL ............ backspace             Fn + ; / . scroll transcript
-//    "/setup" ....... reconfigure WiFi/key  "/reset" . clear conversation
-//    "/tokens" ...... show token usage + estimated cost
+//    type ........... insert at cursor      ENTER ......... send
+//    Shift+ENTER .... new line              DEL ........... delete at cursor
+//    Fn + , / / ..... move cursor L/R       Fn + ; / . .... scroll transcript
+//    "/setup" "/reset" "/tokens" "/model" "/save" "/load" "/sd" "/help"
 // =============================================================================
 
 #include <M5Cardputer.h>
@@ -159,9 +159,16 @@ struct Msg { String role; String content; };   // role: user | assistant | error
 std::vector<Msg> g_msgs;
 
 String g_input;
+int    g_cur        = 0;           // cursor index within g_input
 int    g_scrollPx   = 1 << 20;     // large => clamp to bottom
 bool   g_cursorOn   = true;
 unsigned long g_lastBlink = 0;
+
+// Multi-line input box geometry. The box grows upward as you type and the chat
+// area shrinks to match (g_chatBottom is the bottom of the transcript area).
+static const int INPAD       = 5;
+static const int MAX_IN_ROWS = 4;
+int g_chatBottom = SCREEN_H - INPUT_H - 1;
 
 // ---- Token accounting -------------------------------------------------------
 uint32_t g_sessIn = 0, g_sessOut = 0;     // session totals
@@ -313,23 +320,24 @@ void drawChat() {
   }
   if (!items.empty()) total -= BUB_GAP;
 
-  int maxScroll = max(0, total - CHAT_H);
+  int chatH = g_chatBottom - CHAT_TOP;
+  int maxScroll = max(0, total - chatH);
   if (g_scrollPx > maxScroll) g_scrollPx = maxScroll;
   if (g_scrollPx < 0) g_scrollPx = 0;
 
   if (g_msgs.empty()) {
     canvas.setTextColor(C_MUTED);
     const char* t = "Ask Claude anything";
-    canvas.setCursor((SCREEN_W - (int)strlen(t) * CHAR_W) / 2, CHAT_TOP + CHAT_H / 2 - 4);
+    canvas.setCursor((SCREEN_W - (int)strlen(t) * CHAR_W) / 2, CHAT_TOP + chatH / 2 - 4);
     canvas.print(t);
     return;
   }
 
-  int y = (total <= CHAT_H) ? (CHAT_TOP + (CHAT_H - total)) : (CHAT_TOP - g_scrollPx);
+  int y = (total <= chatH) ? (CHAT_TOP + (chatH - total)) : (CHAT_TOP - g_scrollPx);
 
-  canvas.setClipRect(0, CHAT_TOP, SCREEN_W, CHAT_H);
+  canvas.setClipRect(0, CHAT_TOP, SCREEN_W, chatH);
   for (auto& L : items) {
-    if (y + L.h >= CHAT_TOP && y <= CHAT_TOP + CHAT_H) {
+    if (y + L.h >= CHAT_TOP && y <= g_chatBottom) {
       uint16_t bub, tx;
       if      (L.m->role == "user")  { bub = C_USER_BUB;   tx = C_USER_TX; }
       else if (L.m->role == "error") { bub = C_ERR_BUB;    tx = C_ERR_TX; }
@@ -345,44 +353,94 @@ void drawChat() {
   canvas.clearClipRect();
 
   if (g_scrollPx < maxScroll) {
-    canvas.fillTriangle(SCREEN_W - 9, CHAT_TOP + CHAT_H - 4,
-                        SCREEN_W - 5, CHAT_TOP + CHAT_H - 9,
-                        SCREEN_W - 1, CHAT_TOP + CHAT_H - 4, C_DIM);
+    canvas.fillTriangle(SCREEN_W - 9, g_chatBottom - 4,
+                        SCREEN_W - 5, g_chatBottom - 9,
+                        SCREEN_W - 1, g_chatBottom - 4, C_DIM);
   }
 }
 
 // =============================================================================
-//  Input bar
+//  Input bar (multi-line, with a movable edit cursor)
 // =============================================================================
-void drawInputBar(bool busy) {
-  int iy = SCREEN_H - INPUT_H + 1;
-  canvas.fillRoundRect(3, iy, SCREEN_W - 6, INPUT_H - 2, 5, C_INPUT_BG);
-  int tx = 8;
-  int ty = iy + (INPUT_H - 2 - 8) / 2;
+int inputCols() { return ((SCREEN_W - 6) - 2 * INPAD) / CHAR_W; }
 
+// Hard-wrap g_input into display rows (honouring '\n'), and map the cursor
+// index g_cur to a (row, col) within those rows.
+void layoutInput(std::vector<String>& rows, int& curRow, int& curCol) {
+  int maxC = inputCols();
+  rows.clear();
+  String cur;
+  curRow = 0; curCol = 0;
+  int n = (int)g_input.length();
+  if (g_cur < 0) g_cur = 0;
+  if (g_cur > n) g_cur = n;
+  for (int i = 0; i <= n; i++) {
+    if (i == g_cur) { curRow = (int)rows.size(); curCol = (int)cur.length(); }
+    if (i == n) break;
+    char c = g_input[i];
+    if (c == '\n') { rows.push_back(cur); cur = ""; }
+    else {
+      cur += c;
+      if ((int)cur.length() >= maxC) { rows.push_back(cur); cur = ""; }
+    }
+  }
+  rows.push_back(cur);
+}
+
+int inputRowCount() {
+  int maxC = inputCols(), rows = 1, col = 0;
+  for (int i = 0; i < (int)g_input.length(); i++) {
+    char c = g_input[i];
+    if (c == '\n') { rows++; col = 0; }
+    else { col++; if (col >= maxC) { rows++; col = 0; } }
+  }
+  return min(rows, MAX_IN_ROWS);
+}
+
+int inputBoxHeight() { return inputRowCount() * LINE_H + 6; }
+
+void drawInputBar(bool busy) {
   if (busy) {
+    int iy = SCREEN_H - INPUT_H + 1;
+    canvas.fillRoundRect(3, iy, SCREEN_W - 6, INPUT_H - 2, 5, C_INPUT_BG);
     canvas.setTextColor(C_ACCENT);
-    canvas.setCursor(tx, ty);
+    canvas.setCursor(8, iy + (INPUT_H - 2 - 8) / 2);
     canvas.print("Claude is typing...");
     return;
   }
 
-  int maxChars = ((SCREEN_W - 6) - 2 * 5) / CHAR_W;
-  String shown = "> " + g_input;
-  if ((int)shown.length() > maxChars)
-    shown = "> " + g_input.substring(g_input.length() - (maxChars - 2));
+  std::vector<String> rows;
+  int curRow, curCol;
+  layoutInput(rows, curRow, curCol);
+
+  int visRows = min((int)rows.size(), MAX_IN_ROWS);
+  int boxH = visRows * LINE_H + 6;
+  int iy = SCREEN_H - boxH;
+  canvas.fillRoundRect(3, iy, SCREEN_W - 6, boxH - 1, 5, C_INPUT_BG);
+
+  // Scroll the box so the cursor row stays visible.
+  int firstRow = max(0, (int)rows.size() - MAX_IN_ROWS);
+  if (curRow < firstRow) firstRow = curRow;
+  if (curRow >= firstRow + MAX_IN_ROWS) firstRow = curRow - MAX_IN_ROWS + 1;
 
   canvas.setTextColor(C_INPUT_TX);
-  canvas.setCursor(tx, ty);
-  canvas.print(shown);
-  if (g_cursorOn)
-    canvas.fillRect(tx + (int)shown.length() * CHAR_W + 1, ty, 5, 8, C_ACCENT);
+  for (int r = firstRow; r < firstRow + visRows && r < (int)rows.size(); r++) {
+    canvas.setCursor(INPAD + 3, iy + 3 + (r - firstRow) * LINE_H);
+    canvas.print(rows[r]);
+  }
+  if (g_cursorOn && curRow >= firstRow && curRow < firstRow + visRows) {
+    int cx = INPAD + 3 + curCol * CHAR_W;
+    int cy = iy + 3 + (curRow - firstRow) * LINE_H;
+    canvas.fillRect(cx, cy, 5, 8, C_ACCENT);
+  }
 }
 
 // =============================================================================
 //  Full-screen composers
 // =============================================================================
 void renderChat(bool busy = false) {
+  int boxH = busy ? INPUT_H : inputBoxHeight();
+  g_chatBottom = SCREEN_H - boxH - 1;
   canvas.fillScreen(C_BG);
   drawStatusBar();
   drawChat();
@@ -1023,16 +1081,16 @@ void submitPrompt() {
   prompt.trim();
   if (prompt.length() == 0) return;
 
-  if (prompt == "/setup")  { g_input = ""; startSetup(); return; }
-  if (prompt == "/reset")  { g_msgs.clear(); g_input = ""; renderChat(); return; }
-  if (prompt == "/tokens") { g_input = ""; showTokens(); renderChat(); return; }
-  if (prompt == "/model")  { g_input = ""; startModel(); return; }
-  if (prompt == "/save")   { g_input = ""; saveConversation(); renderChat(); return; }
-  if (prompt == "/load")   { g_input = ""; startLoad(); return; }
-  if (prompt == "/sd")     { g_input = ""; showSD(); renderChat(); return; }
-  if (prompt == "/help")   { g_input = ""; showHelp(); renderChat(); return; }
+  if (prompt == "/setup")  { g_input = ""; g_cur = 0; startSetup(); return; }
+  if (prompt == "/reset")  { g_msgs.clear(); g_input = ""; g_cur = 0; renderChat(); return; }
+  if (prompt == "/tokens") { g_input = ""; g_cur = 0; showTokens(); renderChat(); return; }
+  if (prompt == "/model")  { g_input = ""; g_cur = 0; startModel(); return; }
+  if (prompt == "/save")   { g_input = ""; g_cur = 0; saveConversation(); renderChat(); return; }
+  if (prompt == "/load")   { g_input = ""; g_cur = 0; startLoad(); return; }
+  if (prompt == "/sd")     { g_input = ""; g_cur = 0; showSD(); renderChat(); return; }
+  if (prompt == "/help")   { g_input = ""; g_cur = 0; showHelp(); renderChat(); return; }
 
-  g_input = "";
+  g_input = ""; g_cur = 0;
   addMessage("user", prompt);
   addMessage("assistant", "");        // placeholder the stream fills in
   renderChat(true);
@@ -1177,18 +1235,39 @@ void loop() {
   }
 
   // --- Chat ---
-  if (status.enter) { submitPrompt(); return; }
-  if (status.del && g_input.length() > 0) { g_input.remove(g_input.length() - 1); renderChat(); return; }
+  if (status.enter) {
+    if (status.shift) {                                  // Shift+Enter = newline
+      g_input = g_input.substring(0, g_cur) + "\n" + g_input.substring(g_cur);
+      g_cur++;
+      renderChat();
+    } else {
+      submitPrompt();
+    }
+    return;
+  }
+  if (status.del) {                                      // backspace at the cursor
+    if (g_cur > 0) { g_input.remove(g_cur - 1, 1); g_cur--; renderChat(); }
+    return;
+  }
 
-  // Scroll the transcript:
-  //  - Fn + arrows: the library puts the fn-layer arrow keycodes in hid_keys
-  //    (KEY_UP=0x52, KEY_DOWN=0x51) -- works even while composing.
-  //  - Plain ; / . : scroll when the input is empty (reading mode).
-  const uint8_t HID_UP = 0x52, HID_DOWN = 0x51;
-  bool sUp = false, sDown = false;
-  for (auto k : status.hid_keys) { if (k == HID_UP) sUp = true; if (k == HID_DOWN) sDown = true; }
-  if (!sUp && !sDown && g_input.length() == 0 && !g_msgs.empty()) {
+  // Fn-layer arrows arrive in hid_keys: up/down scroll the transcript,
+  // left/right move the edit cursor. Plain ; / . scroll only when input is empty.
+  const uint8_t HID_RIGHT = 0x4F, HID_LEFT = 0x50, HID_DOWN = 0x51, HID_UP = 0x52;
+  bool sUp = false, sDown = false, cLeft = false, cRight = false;
+  for (auto k : status.hid_keys) {
+    if (k == HID_UP)    sUp = true;
+    if (k == HID_DOWN)  sDown = true;
+    if (k == HID_LEFT)  cLeft = true;
+    if (k == HID_RIGHT) cRight = true;
+  }
+  if (!sUp && !sDown && !cLeft && !cRight && g_input.length() == 0 && !g_msgs.empty()) {
     for (auto c : status.word) { if (c == ';') sUp = true; if (c == '.') sDown = true; }
+  }
+  if (cLeft || cRight) {
+    if (cLeft  && g_cur > 0)                      g_cur--;
+    if (cRight && g_cur < (int)g_input.length())  g_cur++;
+    renderChat();
+    return;
   }
   if (sUp || sDown) {
     if (sUp)   g_scrollPx -= LINE_H * 3;
@@ -1198,6 +1277,12 @@ void loop() {
     return;
   }
 
-  for (auto c : status.word) g_input += c;
-  renderChat();
+  // Insert typed characters at the cursor.
+  if (!status.word.empty()) {
+    for (auto c : status.word) {
+      g_input = g_input.substring(0, g_cur) + String(c) + g_input.substring(g_cur);
+      g_cur++;
+    }
+    renderChat();
+  }
 }
