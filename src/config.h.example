@@ -42,3 +42,15 @@
 //   Haiku 4.5  ~ in 1 / out 5      Sonnet ~ in 3 / out 15
 #define PRICE_IN_PER_MTOK  1.0
 #define PRICE_OUT_PER_MTOK 5.0
+
+// --- TLS ---
+// By default the firmware validates api.anthropic.com against embedded root
+// CAs (src/anthropic_ca.h) and needs the clock synced over NTP at boot.
+// Uncomment to disable validation (debug only, insecure):
+// #define TLS_INSECURE
+
+// --- microSD pins (override only if your board differs) ---
+// #define SD_SCK_PIN  40
+// #define SD_MISO_PIN 39
+// #define SD_MOSI_PIN 14
+// #define SD_CS_PIN   12

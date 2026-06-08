@@ -29,8 +29,12 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <SD.h>
+#include <SPI.h>
+#include <time.h>
 #include <vector>
 #include <cstring>
+#include "anthropic_ca.h"
 
 // config.h is optional (git-ignored). Without it we fall back to empty values
 // and the on-device setup wizard handles configuration.
@@ -70,6 +74,21 @@
 #ifndef PRICE_OUT_PER_MTOK
   #define PRICE_OUT_PER_MTOK 5.0
 #endif
+// microSD pins (Cardputer 1.1 & ADV share the StampS3 pinout). Override in
+// config.h if your board differs.
+#ifndef SD_SCK_PIN
+  #define SD_SCK_PIN  40
+#endif
+#ifndef SD_MISO_PIN
+  #define SD_MISO_PIN 39
+#endif
+#ifndef SD_MOSI_PIN
+  #define SD_MOSI_PIN 14
+#endif
+#ifndef SD_CS_PIN
+  #define SD_CS_PIN   12
+#endif
+// Define TLS_INSECURE in config.h to skip certificate validation (debug only).
 
 // ---- Geometry (Font0 glyphs are 6x8 px) -------------------------------------
 static const int SCREEN_W  = 240;
@@ -146,12 +165,24 @@ unsigned long g_lastBlink = 0;
 uint32_t g_sessIn = 0, g_sessOut = 0;     // session totals
 uint32_t g_lastIn = 0, g_lastOut = 0;     // last exchange
 
-// ---- Setup wizard -----------------------------------------------------------
-enum class Screen { Setup, Chat };
+// ---- Screens / wizard -------------------------------------------------------
+enum class Screen { Setup, Chat, Model };
 Screen g_screen = Screen::Chat;
 int    g_setupField = 0;
 String g_setupBuf;
 static const char* SETUP_LABELS[3] = {"WiFi SSID", "WiFi password", "Anthropic API key"};
+
+// ---- Model picker -----------------------------------------------------------
+static const char* MODELS[] = {
+  "claude-haiku-4-5",
+  "claude-sonnet-4-6",
+  "claude-opus-4-8",
+};
+static const int N_MODELS = sizeof(MODELS) / sizeof(MODELS[0]);
+int g_modelSel = 0;
+
+// ---- SD card ----------------------------------------------------------------
+bool g_sdReady = false;
 
 const char* boardName() {
   switch (M5.getBoard()) {
@@ -406,9 +437,130 @@ void showTokens() {
   addMessage("info", s);
 }
 
+void showHelp() {
+  addMessage("info", "Commands:\n/setup  /reset  /tokens\n/model  /save  /load\n/sd  /help");
+}
+
 // =============================================================================
-//  WiFi
+//  Model picker
 // =============================================================================
+void renderModel() {
+  canvas.fillScreen(C_BG);
+  canvas.fillRect(0, 0, SCREEN_W, STATUS_H, C_STATUS);
+  canvas.drawFastHLine(0, STATUS_H, SCREEN_W, C_DIM);
+  canvas.setTextColor(C_ACCENT);
+  canvas.setCursor(5, 3);
+  canvas.print("Select model");
+
+  int y = STATUS_H + 12;
+  for (int i = 0; i < N_MODELS; i++) {
+    int rowY = y + i * 16;
+    bool sel = (i == g_modelSel);
+    if (sel) canvas.fillRoundRect(6, rowY - 3, SCREEN_W - 12, 14, 4, C_INPUT_BG);
+    canvas.setTextColor(sel ? C_ACCENT : C_CLAUDE_TX);
+    canvas.setCursor(12, rowY);
+    canvas.print(sel ? ">" : " ");
+    canvas.setCursor(24, rowY);
+    canvas.print(MODELS[i]);
+  }
+  canvas.setTextColor(C_MUTED);
+  const char* h = "[;/.] move  [ENTER] ok  [`] cancel";
+  canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 10);
+  canvas.print(h);
+  canvas.pushSprite(0, 0);
+}
+void startModel() {
+  g_modelSel = 0;
+  for (int i = 0; i < N_MODELS; i++) if (g_cfg.model == MODELS[i]) { g_modelSel = i; break; }
+  g_screen = Screen::Model;
+  renderModel();
+}
+
+// =============================================================================
+//  microSD: save / load conversations
+// =============================================================================
+bool initSD() {
+  if (g_sdReady) return true;
+  static bool spiUp = false;
+  if (!spiUp) { SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN); spiUp = true; }
+  g_sdReady = SD.begin(SD_CS_PIN, SPI, 25000000) || SD.begin(SD_CS_PIN, SPI, 4000000);
+  return g_sdReady;
+}
+
+void showSD() {
+  if (!initSD()) { addMessage("info", "No SD card detected"); return; }
+  uint64_t mb = SD.cardSize() / (1024ULL * 1024ULL);
+  addMessage("info", "SD ready: " + String((uint32_t)mb) + " MB. Use /save and /load.");
+}
+
+void saveConversation() {
+  if (!initSD()) { addMessage("info", "No SD card detected"); return; }
+  if (!SD.exists("/claudeputer")) SD.mkdir("/claudeputer");
+
+  String path;
+  char buf[40];
+  for (int n = 1; n < 1000; n++) {
+    snprintf(buf, sizeof(buf), "/claudeputer/chat-%03d.json", n);
+    if (!SD.exists(buf)) { path = buf; break; }
+  }
+  if (path.length() == 0) { addMessage("info", "SD chat slots full"); return; }
+
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) { addMessage("info", "SD write failed"); return; }
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (auto& m : g_msgs) {
+    if (m.role != "user" && m.role != "assistant") continue;
+    JsonObject o = arr.add<JsonObject>();
+    o["role"]    = m.role;
+    o["content"] = m.content;
+  }
+  serializeJson(doc, f);
+  f.close();
+  addMessage("info", "Saved " + path);
+}
+
+void loadConversation() {
+  if (!initSD()) { addMessage("info", "No SD card detected"); return; }
+
+  String path;
+  char buf[40];
+  for (int n = 999; n >= 1; n--) {
+    snprintf(buf, sizeof(buf), "/claudeputer/chat-%03d.json", n);
+    if (SD.exists(buf)) { path = buf; break; }
+  }
+  if (path.length() == 0) { addMessage("info", "No saved chats found"); return; }
+
+  File f = SD.open(path, FILE_READ);
+  if (!f) { addMessage("info", "SD read failed"); return; }
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, f);
+  f.close();
+  if (e) { addMessage("info", "Parse error in " + path); return; }
+
+  g_msgs.clear();
+  for (JsonObject o : doc.as<JsonArray>())
+    addMessage(o["role"] | "assistant", String((const char*)(o["content"] | "")));
+  addMessage("info", "Loaded " + path);
+}
+
+// =============================================================================
+//  WiFi + time
+// =============================================================================
+// TLS certificate validation needs a real clock (otherwise the cert looks
+// "not yet valid"). Pull the time over SNTP once WiFi is up.
+void syncTime() {
+  configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+  struct tm t;
+  unsigned long start = millis();
+  while (millis() - start < 8000) {
+    if (getLocalTime(&t, 200) && t.tm_year > (2020 - 1900)) return;
+    renderCard("Syncing clock", "NTP...", C_ACCENT);
+    M5Cardputer.update();
+    delay(200);
+  }
+}
+
 bool connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
@@ -425,7 +577,8 @@ bool connectWiFi() {
     delay(280);
   }
   renderCard("Connected", WiFi.localIP().toString(), C_USER_BUB);
-  delay(700);
+  delay(500);
+  syncTime();
   return true;
 }
 
@@ -459,7 +612,11 @@ bool streamClaude(String& err) {
   serializeJson(doc, body);
 
   WiFiClientSecure client;
-  client.setInsecure();
+#ifdef TLS_INSECURE
+  client.setInsecure();                       // debug only -- no cert validation
+#else
+  client.setCACert(ANTHROPIC_ROOT_CA);        // validate api.anthropic.com
+#endif
   client.setTimeout(25000);
 
   HTTPClient https;
@@ -571,6 +728,11 @@ void submitPrompt() {
   if (prompt == "/setup")  { g_input = ""; startSetup(); return; }
   if (prompt == "/reset")  { g_msgs.clear(); g_input = ""; renderChat(); return; }
   if (prompt == "/tokens") { g_input = ""; showTokens(); renderChat(); return; }
+  if (prompt == "/model")  { g_input = ""; startModel(); return; }
+  if (prompt == "/save")   { g_input = ""; saveConversation(); renderChat(); return; }
+  if (prompt == "/load")   { g_input = ""; loadConversation(); renderChat(); return; }
+  if (prompt == "/sd")     { g_input = ""; showSD(); renderChat(); return; }
+  if (prompt == "/help")   { g_input = ""; showHelp(); renderChat(); return; }
 
   g_input = "";
   addMessage("user", prompt);
@@ -614,8 +776,9 @@ void loop() {
   if (now - g_lastBlink > 530) {
     g_cursorOn  = !g_cursorOn;
     g_lastBlink = now;
-    if (g_screen == Screen::Chat) renderChat();
-    else                          renderSetup();
+    if      (g_screen == Screen::Chat)  renderChat();
+    else if (g_screen == Screen::Setup) renderSetup();
+    // Model picker is static -- no cursor to blink.
   }
 
   if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) { delay(5); return; }
@@ -634,6 +797,25 @@ void loop() {
     if (status.del && g_setupBuf.length() > 0) g_setupBuf.remove(g_setupBuf.length() - 1);
     for (auto c : status.word) g_setupBuf += c;
     renderSetup();
+    return;
+  }
+
+  if (g_screen == Screen::Model) {
+    if (status.enter) {
+      g_cfg.model = MODELS[g_modelSel];
+      saveConfig();
+      addMessage("info", "Model set: " + g_cfg.model);
+      goChat();
+      return;
+    }
+    if (status.del) { goChat(); return; }              // cancel
+    bool moved = false;
+    for (auto c : status.word) {
+      if (c == ';') { g_modelSel = (g_modelSel - 1 + N_MODELS) % N_MODELS; moved = true; }
+      if (c == '.') { g_modelSel = (g_modelSel + 1) % N_MODELS;            moved = true; }
+      if (c == '`') { goChat(); return; }               // cancel
+    }
+    if (moved) renderModel();
     return;
   }
 

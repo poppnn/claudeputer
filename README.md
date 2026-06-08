@@ -89,9 +89,20 @@ Claude's on the left, with a status bar (WiFi + battery) on top, a thin
 | `/setup`       | Reconfigure WiFi / API key               |
 | `/reset`       | Clear the conversation                   |
 | `/tokens`      | Show token usage (in/out, session, cost) |
+| `/model`       | Pick the Claude model (saved to NVS)     |
+| `/save`        | Save the conversation to microSD         |
+| `/load`        | Load the most recent saved conversation  |
+| `/sd`          | Show microSD status                      |
+| `/help`        | List all commands                        |
 
 New replies auto-scroll to the bottom. Conversation history is kept
 (`MAX_HISTORY_TURNS` turns) so Claude has context.
+
+**Model picker** (`/model`): choose between Haiku / Sonnet / Opus with `;`/`.`,
+`ENTER` to confirm (`` ` `` cancels). The choice persists across reboots.
+
+**Save to SD** (`/save`, `/load`): conversations are stored as JSON under
+`/claudeputer/chat-NNN.json` on the microSD card. `/load` restores the latest.
 
 **Token usage:** the bar fills as you spend tokens this session (relative to
 `TOKEN_BUDGET`), turning red near the limit. `/tokens` prints exact input/output
@@ -111,7 +122,9 @@ Cardputer ──WiFi──> HTTPS POST api.anthropic.com/v1/messages
 ```
 
 - Config priority: on-device NVS values override compile-time `config.h`.
-- TLS via `WiFiClientSecure` (v1: `setInsecure()` — to be hardened).
+- TLS validated against embedded root CAs ([`src/anthropic_ca.h`](src/anthropic_ca.h));
+  the clock is synced over NTP at boot so the certificate dates check out.
+  Set `TLS_INSECURE` in `config.h` to bypass (debug only).
 - JSON via **ArduinoJson v7**.
 
 ---
@@ -130,14 +143,16 @@ page. On every push to `main`, the workflow in
 
 ---
 
-## Known limitations (v1) & next ideas
+## Done & next ideas
 
-- [ ] TLS certificate validation (pin a root CA) instead of `setInsecure()`
-- [ ] **Streaming** replies (SSE) instead of one block
+Done: chat-bubble UI · streaming replies · token usage bar + `/tokens` ·
+TLS certificate validation (embedded roots + NTP) · on-screen `/model` picker ·
+`/save` & `/load` to microSD.
+
+Next:
 - [ ] Multi-line input + cursor editing
-- [ ] Token-usage / cost indicator
-- [ ] Save conversations to SD card
-- [ ] On-screen model / max_tokens settings
+- [ ] On-screen `max_tokens` / system-prompt settings
+- [ ] Browse & pick which saved conversation to load
 - [ ] Use the ADV's extras (IMU, mic, speaker, IR)
 
 ---
