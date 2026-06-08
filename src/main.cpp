@@ -29,6 +29,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <WebServer.h>
 #include <SD.h>
 #include <SPI.h>
 #include <time.h>
@@ -165,12 +166,19 @@ unsigned long g_lastBlink = 0;
 uint32_t g_sessIn = 0, g_sessOut = 0;     // session totals
 uint32_t g_lastIn = 0, g_lastOut = 0;     // last exchange
 
-// ---- Screens / wizard -------------------------------------------------------
-enum class Screen { Setup, Chat, Model };
+// ---- Screens ----------------------------------------------------------------
+// Setup is split into 3 steps: pick a scanned WiFi -> type password -> import
+// the API key (web form / SD file / typing).
+enum class Screen { Scan, Pass, ApiKey, Chat, Model };
 Screen g_screen = Screen::Chat;
-int    g_setupField = 0;
-String g_setupBuf;
-static const char* SETUP_LABELS[3] = {"WiFi SSID", "WiFi password", "Anthropic API key"};
+
+// ---- WiFi scan / setup ------------------------------------------------------
+struct Net { String ssid; int rssi; bool locked; };
+std::vector<Net> g_nets;
+int    g_netSel = 0, g_netTop = 0;
+String g_selSsid;
+String g_passBuf;
+String g_apiBuf;
 
 // ---- Model picker -----------------------------------------------------------
 static const char* MODELS[] = {
@@ -183,6 +191,11 @@ int g_modelSel = 0;
 
 // ---- SD card ----------------------------------------------------------------
 bool g_sdReady = false;
+
+// ---- API-key web import -----------------------------------------------------
+WebServer g_web(80);
+bool g_webUp = false;
+volatile bool g_apiImported = false;
 
 const char* boardName() {
   switch (M5.getBoard()) {
@@ -368,38 +381,113 @@ void renderChat(bool busy = false) {
   canvas.pushSprite(0, 0);
 }
 
-void renderSetup() {
-  canvas.fillScreen(C_BG);
+static void setupHeader(const String& title) {
   canvas.fillRect(0, 0, SCREEN_W, STATUS_H, C_STATUS);
   canvas.drawFastHLine(0, STATUS_H, SCREEN_W, C_DIM);
   canvas.setTextColor(C_ACCENT);
   canvas.setCursor(5, 3);
-  canvas.print("Setup");
-  String prog = String(g_setupField + 1) + "/3";
-  canvas.setTextColor(C_MUTED);
-  canvas.setCursor(SCREEN_W - 5 - (int)prog.length() * CHAR_W, 3);
-  canvas.print(prog);
+  canvas.print(title);
+}
 
+// Step 1: pick a scanned WiFi network.
+void renderScan() {
+  canvas.fillScreen(C_BG);
+  setupHeader("Select WiFi");
+  String cnt = String((int)g_nets.size()) + " found";
+  canvas.setTextColor(C_MUTED);
+  canvas.setCursor(SCREEN_W - 5 - (int)cnt.length() * CHAR_W, 3);
+  canvas.print(cnt);
+
+  if (g_nets.empty()) {
+    canvas.setTextColor(C_MUTED);
+    const char* t = "No networks - [DEL] rescan";
+    canvas.setCursor((SCREEN_W - (int)strlen(t) * CHAR_W) / 2, STATUS_H + 32);
+    canvas.print(t);
+    canvas.pushSprite(0, 0);
+    return;
+  }
+
+  const int rowH = 14;
+  int top = STATUS_H + 4;
+  int rows = (SCREEN_H - 11 - top) / rowH;
+  if (g_netSel < g_netTop) g_netTop = g_netSel;
+  if (g_netSel >= g_netTop + rows) g_netTop = g_netSel - rows + 1;
+
+  for (int i = g_netTop; i < (int)g_nets.size() && i < g_netTop + rows; i++) {
+    int rowY = top + (i - g_netTop) * rowH;
+    bool sel = (i == g_netSel);
+    if (sel) canvas.fillRoundRect(4, rowY - 1, SCREEN_W - 8, rowH - 1, 4, C_INPUT_BG);
+    canvas.setTextColor(sel ? C_ACCENT : C_CLAUDE_TX);
+    canvas.setCursor(10, rowY + 2);
+    String s = g_nets[i].ssid;
+    if (s.length() > 26) s = s.substring(0, 26);
+    canvas.print(s);
+    int rx = SCREEN_W - 14;
+    int bars = g_nets[i].rssi >= -60 ? 3 : g_nets[i].rssi >= -72 ? 2 : 1;
+    for (int b = 0; b < 3; b++) {
+      int bh = 2 + b * 2;
+      canvas.fillRect(rx + b * 3, rowY + 2 + (8 - bh), 2, bh, b < bars ? (sel ? C_ACCENT : C_MUTED) : C_DIM);
+    }
+  }
+
+  canvas.setTextColor(C_MUTED);
+  const char* h = "[;/.] move  [ENTER] ok  [DEL] rescan";
+  canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 9);
+  canvas.print(h);
+  canvas.pushSprite(0, 0);
+}
+
+// Step 2: type the WiFi password for the chosen network.
+void renderPass() {
+  canvas.fillScreen(C_BG);
+  setupHeader("WiFi password");
   int cardY = STATUS_H + 8;
   int cardH = SCREEN_H - cardY - 16;
   canvas.fillRoundRect(6, cardY, SCREEN_W - 12, cardH, 6, C_INPUT_BG);
-
   canvas.setTextColor(C_MUTED);
   canvas.setCursor(14, cardY + 8);
-  canvas.print(SETUP_LABELS[g_setupField]);
+  String lbl = g_selSsid; if (lbl.length() > 30) lbl = lbl.substring(0, 30);
+  canvas.print(lbl);
 
   canvas.setTextColor(C_INPUT_TX);
-  std::vector<String> lines = wrapText(g_setupBuf, (SCREEN_W - 12 - 16) / CHAR_W);
-  int y = cardY + 8 + LINE_H + 2;
+  std::vector<String> lines = wrapText(g_passBuf, (SCREEN_W - 12 - 16) / CHAR_W);
+  int y = cardY + 8 + LINE_H + 4;
   for (auto& ln : lines) { canvas.setCursor(14, y); canvas.print(ln); y += LINE_H; }
   int curX = 14 + (lines.empty() ? 0 : (int)lines.back().length()) * CHAR_W + 1;
   if (g_cursorOn) canvas.fillRect(curX, y - LINE_H, 5, 8, C_ACCENT);
 
   canvas.setTextColor(C_MUTED);
-  const char* hint = "[ENTER] next   [DEL] erase";
-  canvas.setCursor((SCREEN_W - (int)strlen(hint) * CHAR_W) / 2, SCREEN_H - 10);
-  canvas.print(hint);
+  const char* h = "[ENTER] connect   [`] back";
+  canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 10);
+  canvas.print(h);
+  canvas.pushSprite(0, 0);
+}
 
+// Step 3: import the API key (web form / SD file / typing).
+void renderApi() {
+  canvas.fillScreen(C_BG);
+  setupHeader("Import API key");
+  int y = STATUS_H + 7;
+  canvas.setTextColor(C_MUTED);
+  canvas.setCursor(8, y); canvas.print("On a phone/PC on this WiFi,"); y += LINE_H;
+  canvas.setCursor(8, y); canvas.print("open & paste your key:");      y += LINE_H + 1;
+  canvas.setTextColor(C_ACCENT);
+  canvas.setCursor(8, y); canvas.print("http://" + WiFi.localIP().toString() + "/"); y += LINE_H + 4;
+
+  canvas.fillRoundRect(6, y, SCREEN_W - 12, 22, 5, C_INPUT_BG);
+  int maxc = (SCREEN_W - 12 - 12) / CHAR_W - 1;
+  String disp;
+  if (g_apiBuf.length() == 0)         disp = "(or type it here)";
+  else if ((int)g_apiBuf.length() > maxc) disp = "..." + g_apiBuf.substring(g_apiBuf.length() - (maxc - 3));
+  else                                disp = g_apiBuf;
+  canvas.setTextColor(g_apiBuf.length() ? C_INPUT_TX : C_DIM);
+  canvas.setCursor(12, y + 7); canvas.print(disp);
+  if (g_cursorOn && g_apiBuf.length()) canvas.fillRect(12 + (int)disp.length() * CHAR_W + 1, y + 6, 5, 8, C_ACCENT);
+
+  canvas.setTextColor(C_MUTED);
+  const char* h = "[ENTER] save   (SD apikey.txt auto)";
+  canvas.setCursor((SCREEN_W - (int)strlen(h) * CHAR_W) / 2, SCREEN_H - 10);
+  canvas.print(h);
   canvas.pushSprite(0, 0);
 }
 
@@ -691,35 +779,92 @@ bool streamClaude(String& err) {
 }
 
 // =============================================================================
-//  Setup wizard flow
+//  Setup flow: scan WiFi -> password -> import API key
 // =============================================================================
-void startSetup() {
-  g_screen     = Screen::Setup;
-  g_setupField = 0;
-  g_setupBuf   = g_cfg.ssid;
-  renderSetup();
+void goChat() { g_screen = Screen::Chat; renderChat(); }
+
+void scanNetworks() {
+  renderCard("Scanning", "WiFi networks...", C_ACCENT);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false);
+  int n = WiFi.scanNetworks();
+  g_nets.clear();
+  for (int i = 0; i < n; i++) {
+    String s = WiFi.SSID(i);
+    if (s.length() == 0) continue;
+    bool dup = false;
+    for (auto& e : g_nets) if (e.ssid == s) { dup = true; break; }
+    if (dup) continue;
+    Net net;
+    net.ssid   = s;
+    net.rssi   = WiFi.RSSI(i);
+    net.locked = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    g_nets.push_back(net);
+  }
+  WiFi.scanDelete();
+  g_netSel = 0;
+  g_netTop = 0;
 }
-bool setupAdvance() {                       // returns true when finished
-  switch (g_setupField) {
-    case 0: g_cfg.ssid   = g_setupBuf; break;
-    case 1: g_cfg.pass   = g_setupBuf; break;
-    case 2: g_cfg.apiKey = g_setupBuf; break;
+
+void startSetup() {
+  g_screen = Screen::Scan;
+  scanNetworks();
+  renderScan();
+}
+
+// --- API key import over a tiny web form (paste from your phone/PC) ---
+void stopWeb() { if (g_webUp) { g_web.stop(); g_webUp = false; } }
+
+void startWeb() {
+  g_apiImported = false;
+  g_web.on("/", HTTP_GET, []() {
+    g_web.send(200, "text/html",
+      "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Claudeputer setup</title>"
+      "<body style='font-family:system-ui;background:#111;color:#eee;margin:0;padding:24px'>"
+      "<h2 style='color:#d97706'>Claudeputer</h2>"
+      "<p>Paste your Anthropic API key:</p>"
+      "<form method=POST action=/save>"
+      "<input name=key autocomplete=off autocapitalize=off spellcheck=false "
+      "style='width:100%;box-sizing:border-box;padding:12px;font-size:16px;border-radius:8px;border:1px solid #444;background:#1c1c22;color:#eee'>"
+      "<button style='margin-top:14px;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#d97706;color:#fff'>Save</button>"
+      "</form></body>");
+  });
+  g_web.on("/save", HTTP_POST, []() {
+    String k = g_web.arg("key"); k.trim();
+    if (k.length()) { g_apiBuf = k; g_apiImported = true; }
+    g_web.send(200, "text/html",
+      "<body style='font-family:system-ui;background:#111;color:#eee;padding:24px'>"
+      "<h2 style='color:#d97706'>Saved &#10003;</h2>"
+      "<p>Close this tab and return to the Cardputer.</p></body>");
+  });
+  g_web.begin();
+  g_webUp = true;
+}
+
+void startApi() {
+  g_apiBuf = g_cfg.apiKey;                         // prefill (reconfigure)
+  if (initSD() && SD.exists("/claudeputer/apikey.txt")) {   // auto-import from SD
+    File f = SD.open("/claudeputer/apikey.txt", FILE_READ);
+    if (f) { String k = f.readStringUntil('\n'); k.trim(); if (k.length()) g_apiBuf = k; f.close(); }
   }
-  g_setupField++;
-  if (g_setupField <= 2) {
-    g_setupBuf = (g_setupField == 1) ? g_cfg.pass : g_cfg.apiKey;
-    renderSetup();
-    return false;
-  }
+  startWeb();
+  g_screen = Screen::ApiKey;
+  renderApi();
+}
+
+void finalizeSetup() {
+  g_cfg.apiKey = g_apiBuf;
   saveConfig();
-  return true;
+  stopWeb();
+  g_msgs.clear();
+  addMessage("info", "Setup done. WiFi: " + g_cfg.ssid + "   Model: " + g_cfg.model);
+  goChat();
 }
 
 // =============================================================================
 //  Main flow
 // =============================================================================
-void goChat() { g_screen = Screen::Chat; renderChat(); }
-
 void submitPrompt() {
   String prompt = g_input;
   prompt.trim();
@@ -772,31 +917,76 @@ void setup() {
 void loop() {
   M5Cardputer.update();
 
+  // Serve the API-key import page while it is running.
+  if (g_webUp) {
+    g_web.handleClient();
+    if (g_apiImported) { finalizeSetup(); return; }
+  }
+
   unsigned long now = millis();
   if (now - g_lastBlink > 530) {
     g_cursorOn  = !g_cursorOn;
     g_lastBlink = now;
-    if      (g_screen == Screen::Chat)  renderChat();
-    else if (g_screen == Screen::Setup) renderSetup();
-    // Model picker is static -- no cursor to blink.
+    if      (g_screen == Screen::Chat)   renderChat();
+    else if (g_screen == Screen::Pass)   renderPass();
+    else if (g_screen == Screen::ApiKey) renderApi();
+    // Scan & Model lists are static -- no cursor to blink.
   }
 
   if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) { delay(5); return; }
   Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
   g_cursorOn = true;
 
-  if (g_screen == Screen::Setup) {
-    if (status.enter) {
-      if (setupAdvance()) {
-        g_msgs.clear();
-        if (connectWiFi()) goChat();
-        else { addMessage("error", "WiFi failed. Type /setup to retry."); goChat(); }
+  // ---- Setup step 1: WiFi scan list ----
+  if (g_screen == Screen::Scan) {
+    if (status.del) { scanNetworks(); renderScan(); return; }       // rescan
+    if (status.enter && !g_nets.empty()) {
+      g_selSsid = g_nets[g_netSel].ssid;
+      g_passBuf = "";
+      if (!g_nets[g_netSel].locked) {                               // open network: no password
+        g_cfg.ssid = g_selSsid; g_cfg.pass = "";
+        if (connectWiFi()) startApi();
+        else { renderCard("WiFi failed", "try again", C_ERR_TX); delay(1200); renderScan(); }
+      } else {
+        g_screen = Screen::Pass; renderPass();
       }
       return;
     }
-    if (status.del && g_setupBuf.length() > 0) g_setupBuf.remove(g_setupBuf.length() - 1);
-    for (auto c : status.word) g_setupBuf += c;
-    renderSetup();
+    bool moved = false;
+    for (auto c : status.word) {
+      if (c == ';') { if (g_netSel > 0) g_netSel--; moved = true; }
+      if (c == '.') { if (g_netSel < (int)g_nets.size() - 1) g_netSel++; moved = true; }
+    }
+    if (moved) renderScan();
+    return;
+  }
+
+  // ---- Setup step 2: WiFi password ----
+  if (g_screen == Screen::Pass) {
+    if (status.enter) {
+      g_cfg.ssid = g_selSsid; g_cfg.pass = g_passBuf;
+      if (connectWiFi()) startApi();
+      else { renderCard("WiFi failed", "wrong password?", C_ERR_TX); delay(1200); renderPass(); }
+      return;
+    }
+    if (status.del && g_passBuf.length() > 0) g_passBuf.remove(g_passBuf.length() - 1);
+    bool back = false;
+    for (auto c : status.word) { if (c == '`') back = true; else g_passBuf += c; }
+    if (back) { startSetup(); return; }                              // back to scan
+    renderPass();
+    return;
+  }
+
+  // ---- Setup step 3: API key import ----
+  if (g_screen == Screen::ApiKey) {
+    if (status.enter) {
+      String k = g_apiBuf; k.trim();
+      if (k.length()) { g_apiBuf = k; finalizeSetup(); }
+      return;
+    }
+    if (status.del && g_apiBuf.length() > 0) g_apiBuf.remove(g_apiBuf.length() - 1);
+    for (auto c : status.word) g_apiBuf += c;
+    renderApi();
     return;
   }
 

@@ -65,16 +65,23 @@ StampS3** (PSRAM enabled), install the **M5Cardputer** (≥ 1.2.0) and
 
 ## First boot — on-device setup
 
-No secrets are embedded in the firmware. On first boot a setup wizard appears:
+No secrets are embedded in the firmware. On first boot a 3-step setup appears:
 
-1. **WiFi SSID** → `ENTER`
-2. **WiFi password** → `ENTER`
-3. **Anthropic API key** ([get one](https://console.anthropic.com/settings/keys)) → `ENTER`
+1. **Pick your WiFi** — the Cardputer scans nearby networks; choose one with
+   `;`/`.` and `ENTER` (`DEL` rescans). No need to type the SSID.
+2. **WiFi password** — type it, `ENTER` to connect (`` ` `` goes back).
+3. **Import your API key** — once online, the screen shows a URL like
+   `http://192.168.x.x/`. Open it on your **phone or PC on the same WiFi** and
+   **paste** your [API key](https://console.anthropic.com/settings/keys) into the
+   form — no painful typing on the tiny keyboard. (You can still type it on the
+   device, or drop it in `apikey.txt` on the SD card to auto-import.)
 
 Settings are stored on the device (NVS) and survive reboots. The API key only
 ever leaves the device to reach `api.anthropic.com`.
 
-To reconfigure later: type `/setup` + `ENTER`, **or** hold **G0** while powering on.
+> The import form runs only during setup, on your local network, over plain
+> HTTP — fine for a trusted home network. To reconfigure later: type `/setup`
+> + `ENTER`, **or** hold **G0** while powering on.
 
 ---
 

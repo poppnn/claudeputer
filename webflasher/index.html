@@ -63,13 +63,13 @@
 
     <div class="card">
       <h3 style="margin-top:0;">First boot — on-device setup</h3>
-      <p>No secrets are baked into this firmware. On first boot the Cardputer shows a setup screen:</p>
+      <p>No secrets are baked into this firmware. On first boot the Cardputer shows a 3-step setup:</p>
       <ol>
-        <li>Type your <strong>WiFi SSID</strong>, press <code>ENTER</code>.</li>
-        <li>Type your <strong>WiFi password</strong>, press <code>ENTER</code>.</li>
-        <li>Paste/type your <strong>Anthropic API key</strong> (<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get one here</a>), press <code>ENTER</code>.</li>
+        <li><strong>Pick your WiFi</strong> from the scanned list (<code>;</code>/<code>.</code> to move, <code>ENTER</code> to select) — no need to type the SSID.</li>
+        <li>Type your <strong>WiFi password</strong>, <code>ENTER</code> to connect.</li>
+        <li><strong>Import your API key</strong>: the screen shows a URL like <code>http://192.168.x.x/</code> — open it on your <strong>phone/PC on the same WiFi</strong> and paste your <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">API key</a> into the form. (You can also type it, or drop <code>apikey.txt</code> on the SD card.)</li>
       </ol>
-      <p class="muted">Settings are saved on the device (NVS). To reconfigure later, type <code>/setup</code> and press ENTER, or hold <strong>G0</strong> while powering on. Your key stays on the Cardputer and is sent only to <code>api.anthropic.com</code>.</p>
+      <p class="muted">Settings are saved on the device (NVS). The import form runs only during setup, on your local network. To reconfigure later, type <code>/setup</code> and press ENTER, or hold <strong>G0</strong> while powering on. Your key stays on the Cardputer and is sent only to <code>api.anthropic.com</code>.</p>
     </div>
 
     <footer>
