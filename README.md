@@ -75,19 +75,22 @@ To reconfigure later: type `/setup` + `ENTER`, **or** hold **G0** while powering
 
 ## Usage
 
-| Screen | Key        | Action                                  |
-|--------|------------|-----------------------------------------|
-| Input  | *(type)*   | Write your question                     |
-| Input  | `ENTER`    | Send to Claude                          |
-| Input  | `DEL`      | Backspace                               |
-| Input  | `/setup`   | Reconfigure WiFi / API key              |
-| Input  | `/reset`   | Clear conversation history              |
-| Reply  | `;` / `.`  | Scroll up / down                        |
-| Reply  | `space`    | Page down                               |
-| Reply  | `` ` ``    | Back to input (new question)            |
+A single chat view: your messages appear as orange bubbles on the right,
+Claude's on the left, with a status bar (WiFi + battery) on top and a rounded
+input bar at the bottom. Errors and the "thinking" state show inline.
 
-Conversation history is kept (`MAX_HISTORY_TURNS` turns) so Claude has context.
-Default model is `claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
+| Key            | Action                                   |
+|----------------|------------------------------------------|
+| *(type)*       | Write your prompt                        |
+| `ENTER`        | Send to Claude                           |
+| `DEL`          | Backspace                                |
+| `Fn` + `;`/`.` | Scroll the transcript up / down          |
+| `/setup`       | Reconfigure WiFi / API key               |
+| `/reset`       | Clear the conversation                   |
+
+New replies auto-scroll to the bottom. Conversation history is kept
+(`MAX_HISTORY_TURNS` turns) so Claude has context. Default model is
+`claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
 
 ---
 
