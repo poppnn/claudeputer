@@ -1037,16 +1037,22 @@ void loop() {
   if (status.enter) { submitPrompt(); return; }
   if (status.del && g_input.length() > 0) { g_input.remove(g_input.length() - 1); renderChat(); return; }
 
-  // Arrow keys (; = up, . = down) scroll the transcript. They scroll directly
-  // when you are not composing (input empty, with a conversation on screen) or
-  // when Fn is held; otherwise they type normally.
-  if (status.fn || (g_input.length() == 0 && !g_msgs.empty())) {
-    bool scrolled = false;
-    for (auto c : status.word) {
-      if (c == ';') { g_scrollPx -= LINE_H * 3; scrolled = true; }   // up
-      if (c == '.') { g_scrollPx += LINE_H * 3; scrolled = true; }   // down
-    }
-    if (scrolled) { if (g_scrollPx < 0) g_scrollPx = 0; renderChat(); return; }
+  // Scroll the transcript:
+  //  - Fn + arrows: the library puts the fn-layer arrow keycodes in hid_keys
+  //    (KEY_UP=0x52, KEY_DOWN=0x51) -- works even while composing.
+  //  - Plain ; / . : scroll when the input is empty (reading mode).
+  const uint8_t HID_UP = 0x52, HID_DOWN = 0x51;
+  bool sUp = false, sDown = false;
+  for (auto k : status.hid_keys) { if (k == HID_UP) sUp = true; if (k == HID_DOWN) sDown = true; }
+  if (!sUp && !sDown && g_input.length() == 0 && !g_msgs.empty()) {
+    for (auto c : status.word) { if (c == ';') sUp = true; if (c == '.') sDown = true; }
+  }
+  if (sUp || sDown) {
+    if (sUp)   g_scrollPx -= LINE_H * 3;
+    if (sDown) g_scrollPx += LINE_H * 3;
+    if (g_scrollPx < 0) g_scrollPx = 0;
+    renderChat();
+    return;
   }
 
   for (auto c : status.word) g_input += c;
