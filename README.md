@@ -169,6 +169,12 @@ Next:
 
 ---
 
+## Contributing
+
+Issues and PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for build steps
+and project gotchas, the [Code of Conduct](CODE_OF_CONDUCT.md), and the
+[Security Policy](SECURITY.md) for reporting vulnerabilities.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem or idea?
+      description: What would you like Claudeputer to do, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: How might it work?
+      description: Any thoughts on the UX, keys, or implementation (optional).
+  - type: dropdown
+    id: board
+    attributes:
+      label: Relevant board(s)
+      multiple: true
+      options:
+        - Cardputer 1.1
+        - Cardputer ADV
+        - Both / either
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links, mockups, references, etc.

@@ -1,0 +1,58 @@
+name: Bug report
+description: Something doesn't work on your Cardputer
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please fill in what you can — details make bugs
+        much easier to fix. Tip: serial logs at 115200 baud (`pio device monitor`)
+        often reveal the cause.
+  - type: dropdown
+    id: board
+    attributes:
+      label: Which board?
+      options:
+        - Cardputer 1.1
+        - Cardputer ADV
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version
+      description: Version from the web flasher (e.g. 1.4.2) or a commit SHA.
+      placeholder: "1.4.2 / web flasher"
+    validations:
+      required: true
+  - type: dropdown
+    id: flash
+    attributes:
+      label: How did you flash it?
+      options:
+        - Web flasher
+        - PlatformIO
+        - Arduino IDE
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Serial logs (optional)
+      description: Output from `pio device monitor` or any serial terminal @ 115200.
+      render: shell

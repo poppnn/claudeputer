@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 README & docs
+    url: https://github.com/poppnn/claudeputer#readme
+    about: Setup, usage, and commands are documented here first.
+  - name: ⚡ Web flasher
+    url: https://poppnn.github.io/claudeputer/
+    about: Flash the latest firmware straight from your browser.
