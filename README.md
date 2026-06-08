@@ -97,7 +97,7 @@ Claude's on the left, with a status bar (WiFi + battery) on top, a thin
 | *(type)*       | Write your prompt                        |
 | `ENTER`        | Send to Claude                           |
 | `DEL`          | Backspace                                |
-| `Fn` + `;`/`.` | Scroll the transcript up / down          |
+| `;` / `.` (arrows) | Scroll transcript up / down (when input is empty; or `Fn`+arrow while typing) |
 | `/setup`       | Reconfigure WiFi / API key               |
 | `/reset`       | Clear the conversation                   |
 | `/tokens`      | Show token usage (in/out, session, cost) |

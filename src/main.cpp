@@ -570,13 +570,36 @@ void startModel() {
 bool initSD() {
   if (g_sdReady) return true;
   static bool spiUp = false;
-  if (!spiUp) { SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN); spiUp = true; }
-  g_sdReady = SD.begin(SD_CS_PIN, SPI, 25000000) || SD.begin(SD_CS_PIN, SPI, 4000000);
-  return g_sdReady;
+  if (!spiUp) {
+    pinMode(SD_CS_PIN, OUTPUT);
+    digitalWrite(SD_CS_PIN, HIGH);
+    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+    spiUp = true;
+  }
+  // Try decreasing clock speeds -- some cards / the ADV traces are picky.
+  const uint32_t freqs[] = {20000000, 10000000, 4000000, 1000000};
+  for (uint32_t f : freqs) {
+    SD.end();
+    delay(20);
+    Serial.printf("[SD] begin CS=%d SCK=%d MISO=%d MOSI=%d @%luHz... ",
+                  SD_CS_PIN, SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, (unsigned long)f);
+    if (SD.begin(SD_CS_PIN, SPI, f)) {
+      uint8_t ct = SD.cardType();
+      Serial.printf("OK (cardType=%d)\n", ct);
+      if (ct != CARD_NONE) { g_sdReady = true; return true; }
+      Serial.println("[SD] mounted but CARD_NONE");
+    } else {
+      Serial.println("fail");
+    }
+  }
+  return false;
 }
 
 void showSD() {
-  if (!initSD()) { addMessage("info", "No SD card detected"); return; }
+  if (!initSD()) {
+    addMessage("info", "No SD card.\nPins SCK40 MISO39 MOSI14 CS12.\nUse a FAT32 card (<=32GB),\nseated firmly.");
+    return;
+  }
   uint64_t mb = SD.cardSize() / (1024ULL * 1024ULL);
   addMessage("info", "SD ready: " + String((uint32_t)mb) + " MB. Use /save and /load.");
 }
@@ -896,6 +919,7 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(1);
+  Serial.begin(115200);   // SD / debug logs over USB (pio device monitor)
 
   canvas.setPsram(true);
   canvas.setColorDepth(16);
@@ -1013,11 +1037,14 @@ void loop() {
   if (status.enter) { submitPrompt(); return; }
   if (status.del && g_input.length() > 0) { g_input.remove(g_input.length() - 1); renderChat(); return; }
 
-  if (status.fn) {                          // Fn + ; / . scrolls the transcript
+  // Arrow keys (; = up, . = down) scroll the transcript. They scroll directly
+  // when you are not composing (input empty, with a conversation on screen) or
+  // when Fn is held; otherwise they type normally.
+  if (status.fn || (g_input.length() == 0 && !g_msgs.empty())) {
     bool scrolled = false;
     for (auto c : status.word) {
-      if (c == ';') { g_scrollPx -= LINE_H * 2; scrolled = true; }
-      if (c == '.') { g_scrollPx += LINE_H * 2; scrolled = true; }
+      if (c == ';') { g_scrollPx -= LINE_H * 3; scrolled = true; }   // up
+      if (c == '.') { g_scrollPx += LINE_H * 3; scrolled = true; }   // down
     }
     if (scrolled) { if (g_scrollPx < 0) g_scrollPx = 0; renderChat(); return; }
   }
