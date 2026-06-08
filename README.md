@@ -2,13 +2,18 @@
 
 Chat with **Claude** from an **M5Stack Cardputer**, over WiFi. ⌨️🤖
 
+<p align="center">
+  <img src="docs/preview.svg" alt="Claudeputer running on a Cardputer" width="560">
+  <br>
+  <sub><i>Illustration of the on-device chat UI (not a photo).</i></sub>
+</p>
+
 The Cardputer connects to WiFi, you type a question on the keyboard, it's sent
-to Anthropic's Messages API, and the reply is shown on screen (scrollable). This
-is an intentionally **simple** first version — the UI will be reworked next.
+to Anthropic's Messages API, and the reply **streams back** on screen as chat
+bubbles. Works on both the Cardputer 1.1 and the Cardputer ADV.
 
 > ⚡ **No toolchain needed** — flash it straight from your browser:
-> **[Web Flasher](https://poppnn.github.io/claudeputer/)** *(live once the first
-> GitHub Pages deploy completes)*.
+> **[Web Flasher](https://poppnn.github.io/claudeputer/)**.
 
 ---
 

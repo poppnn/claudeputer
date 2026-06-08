@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" font-family="ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace">
+  <title>Claudeputer UI preview (illustration)</title>
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef8a22"/>
+      <stop offset="1" stop-color="#cf6f12"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101018"/>
+      <stop offset="1" stop-color="#0c0c12"/>
+    </linearGradient>
+    <pattern id="keys" width="44" height="30" patternUnits="userSpaceOnUse">
+      <rect x="3" y="3" width="36" height="23" rx="5" fill="#262626" stroke="#171717" stroke-width="1"/>
+    </pattern>
+    <clipPath id="screenClip"><rect x="180" y="66" width="360" height="202" rx="4"/></clipPath>
+  </defs>
+
+  <!-- device body -->
+  <rect x="40" y="26" width="640" height="418" rx="30" fill="url(#body)" stroke="#a85807" stroke-width="2"/>
+  <rect x="40" y="26" width="640" height="418" rx="30" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+
+  <!-- screen bezel -->
+  <rect x="166" y="52" width="388" height="230" rx="12" fill="#0a0a0c" stroke="#000" stroke-width="2"/>
+
+  <!-- ===== SCREEN (240x135 logical, scaled x1.5) ===== -->
+  <g clip-path="url(#screenClip)">
+    <g transform="translate(180,66) scale(1.5)">
+      <rect x="0" y="0" width="240" height="135" fill="url(#bg)"/>
+
+      <!-- status bar -->
+      <rect x="0" y="0" width="240" height="14" fill="#18181e"/>
+      <line x1="0" y1="14" x2="240" y2="14" stroke="#3c3c44" stroke-width="1"/>
+      <text x="5" y="10" font-size="8" fill="#d97706">Cardputer</text>
+      <!-- wifi bars -->
+      <rect x="198" y="9" width="3" height="2" fill="#d97706"/>
+      <rect x="202" y="7" width="3" height="4" fill="#d97706"/>
+      <rect x="206" y="5" width="3" height="6" fill="#d97706"/>
+      <rect x="210" y="3" width="3" height="8" fill="#3c3c44"/>
+      <!-- battery -->
+      <rect x="218" y="3" width="16" height="8" rx="2" fill="none" stroke="#8c8c96" stroke-width="1"/>
+      <rect x="234" y="5" width="2" height="4" fill="#8c8c96"/>
+      <rect x="219" y="4" width="10" height="6" fill="#d97706"/>
+
+      <!-- token-usage bar -->
+      <rect x="0" y="15" width="240" height="2" fill="#18181e"/>
+      <rect x="0" y="15" width="74" height="2" fill="#d97706"/>
+
+      <!-- user bubble (right) -->
+      <rect x="72" y="21" width="164" height="26" rx="5" fill="#d97706"/>
+      <text font-size="8" fill="#1a1002">
+        <tspan x="78" y="31">What can you run on a tiny</tspan>
+        <tspan x="78" y="40">Cardputer?</tspan>
+      </text>
+
+      <!-- claude bubble (left) -->
+      <rect x="4" y="52" width="178" height="44" rx="5" fill="#26262e"/>
+      <text font-size="8" fill="#f2f2f7">
+        <tspan x="10" y="62">Plenty: WiFi scanners, a</tspan>
+        <tspan x="10" y="71">BASIC REPL, IR remotes,</tspan>
+        <tspan x="10" y="80">retro games, and me --</tspan>
+        <tspan x="10" y="89">a Claude chat client.</tspan>
+      </text>
+
+      <!-- input bar -->
+      <rect x="3" y="118" width="234" height="16" rx="5" fill="#1e1e26"/>
+      <text x="8" y="129" font-size="8" fill="#ececf1">&gt; ask anything</text>
+      <rect x="86" y="122" width="5" height="8" fill="#d97706"/>
+    </g>
+  </g>
+
+  <!-- speaker dots -->
+  <g fill="#b86510">
+    <circle cx="600" cy="64" r="2.4"/><circle cx="610" cy="64" r="2.4"/><circle cx="620" cy="64" r="2.4"/>
+    <circle cx="600" cy="74" r="2.4"/><circle cx="610" cy="74" r="2.4"/><circle cx="620" cy="74" r="2.4"/>
+  </g>
+
+  <!-- keyboard -->
+  <rect x="58" y="300" width="604" height="120" fill="url(#keys)"/>
+</svg>

@@ -61,6 +61,7 @@ jobs:
         run: |
           cp webflasher/index.html    site/index.html
           cp webflasher/manifest.json site/manifest.json
+          cp docs/preview.svg         site/preview.svg
           touch site/.nojekyll
 
       - name: Upload Pages artifact
