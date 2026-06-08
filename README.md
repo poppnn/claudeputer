@@ -3,7 +3,7 @@
 Chat with **Claude** from an **M5Stack Cardputer**, over WiFi. ⌨️🤖
 
 <p align="center">
-  <img src="docs/preview.svg" alt="Claudeputer running on a Cardputer" width="560">
+  <img src="docs/ui-preview.svg" alt="Claudeputer on-device chat UI" width="520">
   <br>
   <sub><i>Illustration of the on-device chat UI (not a photo).</i></sub>
 </p>
