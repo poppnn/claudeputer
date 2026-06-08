@@ -1,103 +1,137 @@
 # Claudeputer
 
-Discuter avec **Claude** depuis un **M5Stack Cardputer**, en WiFi. ⌨️🤖
+Chat with **Claude** from an **M5Stack Cardputer**, over WiFi. ⌨️🤖
 
-Le Cardputer se connecte au WiFi, tu tapes ta question au clavier, elle est
-envoyée à l'API Messages d'Anthropic, et la réponse s'affiche à l'écran
-(scrollable). Première version volontairement **simple** — l'interface sera
-retravaillée ensuite.
+The Cardputer connects to WiFi, you type a question on the keyboard, it's sent
+to Anthropic's Messages API, and the reply is shown on screen (scrollable). This
+is an intentionally **simple** first version — the UI will be reworked next.
 
-> ⚠️ **Sécurité du compte** : ta clé API et ton mot de passe WiFi vivent dans
-> `src/config.h`, qui est **git-ignoré**. Ne les commit jamais. La requête part
-> directement du Cardputer vers `api.anthropic.com`.
-
----
-
-## Matériel supporté
-
-| Appareil            | Statut        | Note                                              |
-|---------------------|---------------|---------------------------------------------------|
-| Cardputer **1.1**   | ✅ cible principale | ESP32-S3 (StampS3), librairie `M5Cardputer` mature |
-| Cardputer **ADV**   | 🧪 expérimental    | Même famille ESP32-S3 ; env `cardputer_adv`        |
+> ⚡ **No toolchain needed** — flash it straight from your browser:
+> **[Web Flasher](https://poppnn.github.io/claudeputer/)** *(live once the first
+> GitHub Pages deploy completes)*.
 
 ---
 
-## Démarrage rapide
+## One firmware, both boards
 
-### 1. Récupérer le code
+The same image runs on the **Cardputer 1.1** and the **Cardputer ADV**. They
+share the ESP32-S3 SoC and the ST7789 display; only the keyboard controller
+differs (IO-matrix on 1.1, TCA8418 on ADV). The `M5Cardputer` library (≥ 1.2.0)
+**auto-detects the board at runtime** via `M5.getBoard()` and selects the right
+keyboard driver — so a single binary covers both.
+
+| Device            | Status | Notes                                       |
+|-------------------|--------|---------------------------------------------|
+| Cardputer **1.1** | ✅     | IO-matrix keyboard                          |
+| Cardputer **ADV** | ✅     | TCA8418 I²C keyboard, auto-detected         |
+
+---
+
+## Install
+
+### Option A — Web Flasher (easiest)
+
+1. Open the **[Web Flasher](https://poppnn.github.io/claudeputer/)** in desktop
+   **Chrome** or **Edge** (Web Serial API required).
+2. Plug in the Cardputer via USB-C, click **Connect & Install**, pick the serial
+   port. If nothing shows up, hold **G0** (top button) while plugging in.
+3. After flashing, the Cardputer boots into on-device setup (see below).
+
+### Option B — Build from source
+
+With [PlatformIO](https://platformio.org/) (VS Code extension):
+
 ```bash
-git clone <url-du-repo>
+git clone https://github.com/poppnn/claudeputer
 cd claudeputer
+pio run -e cardputer -t upload      # works on both 1.1 and ADV
+pio device monitor                  # serial logs
 ```
 
-### 2. Configurer tes secrets
-```bash
-cp src/config.h.example src/config.h
-```
-Édite `src/config.h` :
-- `WIFI_SSID` / `WIFI_PASSWORD`
-- `ANTHROPIC_API_KEY` — depuis https://console.anthropic.com/settings/keys
-- `CLAUDE_MODEL` — par défaut `claude-haiku-4-5` (rapide & pas cher, idéal petit écran)
+Or with the **Arduino IDE**: install ESP32 board support, select **M5Stack
+StampS3** (PSRAM enabled), install the **M5Cardputer** (≥ 1.2.0) and
+**ArduinoJson** (v7) libraries, then build `src/main.cpp` as a sketch.
 
-### 3a. Compiler & flasher avec PlatformIO (recommandé)
-Avec [PlatformIO](https://platformio.org/) (extension VS Code) :
-```bash
-pio run -e cardputer -t upload      # Cardputer 1.1
-pio device monitor                  # logs série
-```
-Pour l'ADV : `pio run -e cardputer_adv -t upload`
-
-### 3b. Ou avec l'Arduino IDE
-1. Installe le support **ESP32** (board manager → "esp32" par Espressif).
-2. Carte : **M5Stack StampS3** (ou "M5Cardputer" si proposée), PSRAM activée.
-3. Bibliothèques (Library Manager) : **M5Cardputer** et **ArduinoJson** (v7).
-4. Copie `src/main.cpp` dans un sketch `.ino`, ajoute `config.h` à côté, et téléverse.
+> Baking credentials in at compile time is optional — see
+> [`src/config.h.example`](src/config.h.example). By default the device is
+> configured on-device, no `config.h` required.
 
 ---
 
-## Utilisation
+## First boot — on-device setup
 
-| Écran        | Touche        | Action                                  |
-|--------------|---------------|-----------------------------------------|
-| Saisie       | *(taper)*     | Écrire la question                      |
-| Saisie       | `ENTER`       | Envoyer à Claude                        |
-| Saisie       | `DEL`         | Effacer un caractère                    |
-| Réponse      | `;` / `.`     | Scroller haut / bas                     |
-| Réponse      | `espace`      | Page suivante                           |
-| Réponse      | `` ` ``       | Revenir à la saisie (nouvelle question) |
+No secrets are embedded in the firmware. On first boot a setup wizard appears:
 
-L'historique de conversation est conservé (`MAX_HISTORY_TURNS` tours) pour que
-Claude garde le contexte.
+1. **WiFi SSID** → `ENTER`
+2. **WiFi password** → `ENTER`
+3. **Anthropic API key** ([get one](https://console.anthropic.com/settings/keys)) → `ENTER`
+
+Settings are stored on the device (NVS) and survive reboots. The API key only
+ever leaves the device to reach `api.anthropic.com`.
+
+To reconfigure later: type `/setup` + `ENTER`, **or** hold **G0** while powering on.
 
 ---
 
-## Comment ça marche
+## Usage
+
+| Screen | Key        | Action                                  |
+|--------|------------|-----------------------------------------|
+| Input  | *(type)*   | Write your question                     |
+| Input  | `ENTER`    | Send to Claude                          |
+| Input  | `DEL`      | Backspace                               |
+| Input  | `/setup`   | Reconfigure WiFi / API key              |
+| Input  | `/reset`   | Clear conversation history              |
+| Reply  | `;` / `.`  | Scroll up / down                        |
+| Reply  | `space`    | Page down                               |
+| Reply  | `` ` ``    | Back to input (new question)            |
+
+Conversation history is kept (`MAX_HISTORY_TURNS` turns) so Claude has context.
+Default model is `claude-haiku-4-5` (fast & cheap, ideal for a tiny screen).
+
+---
+
+## How it works
 
 ```
 Cardputer ──WiFi──> HTTPS POST api.anthropic.com/v1/messages
    │                     headers: x-api-key, anthropic-version
    │                     body: { model, system, messages[] }
-   └──< réponse JSON ─── content[].text  ──> affichage scrollable
+   └──< JSON response ── content[].text ──> scrollable display
 ```
 
-- TLS via `WiFiClientSecure` (v1 : `setInsecure()`, validation de certificat à
-  durcir plus tard).
+- Config priority: on-device NVS values override compile-time `config.h`.
+- TLS via `WiFiClientSecure` (v1: `setInsecure()` — to be hardened).
 - JSON via **ArduinoJson v7**.
 
 ---
 
-## Limitations connues (v1) & idées suivantes
+## Web flasher & CI
 
-- [ ] Validation du certificat TLS (root CA épinglé) au lieu de `setInsecure()`
-- [ ] Réponses en **streaming** (SSE) plutôt qu'en bloc
-- [ ] Saisie multi-lignes + édition du curseur
-- [ ] Indicateur d'usage de tokens / coût
-- [ ] Sauvegarde des conversations sur carte SD
-- [ ] Réglages à l'écran (modèle, max_tokens) sans recompiler
-- [ ] Profil dédié et test du **Cardputer ADV**
+`webflasher/` holds the [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+page. On every push to `main`, the workflow in
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+1. builds the firmware with PlatformIO,
+2. merges bootloader + partitions + app into one `.bin` (`esptool merge_bin`),
+3. publishes the flasher + binary to **GitHub Pages**.
+
+> Requires Pages to be set to the **GitHub Actions** source (Settings → Pages).
 
 ---
 
-## Licence
+## Known limitations (v1) & next ideas
 
-MIT — voir [LICENSE](LICENSE).
+- [ ] TLS certificate validation (pin a root CA) instead of `setInsecure()`
+- [ ] **Streaming** replies (SSE) instead of one block
+- [ ] Multi-line input + cursor editing
+- [ ] Token-usage / cost indicator
+- [ ] Save conversations to SD card
+- [ ] On-screen model / max_tokens settings
+- [ ] Use the ADV's extras (IMU, mic, speaker, IR)
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claudeputer — Web Flasher</title>
+  <meta name="description" content="Flash Claudeputer firmware to your M5Stack Cardputer (1.1 or ADV) straight from the browser." />
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { --accent:#d97706; --bg:#0d0d10; --fg:#f4f4f5; --muted:#a1a1aa; --card:#17171c; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+           background:var(--bg); color:var(--fg); line-height:1.6; }
+    .wrap { max-width:680px; margin:0 auto; padding:48px 20px 80px; }
+    h1 { font-size:2rem; margin:0 0 4px; }
+    .tag { color:var(--accent); font-weight:600; letter-spacing:.04em; text-transform:uppercase; font-size:.8rem; }
+    p { color:var(--fg); }
+    .muted { color:var(--muted); }
+    .card { background:var(--card); border:1px solid #26262e; border-radius:14px; padding:24px; margin:24px 0; }
+    .flash { text-align:center; padding:32px 24px; }
+    esp-web-install-button { --esp-tools-button-color:#fff; --esp-tools-button-background-color:var(--accent); }
+    ol { padding-left:20px; }
+    li { margin:6px 0; }
+    code { background:#26262e; padding:2px 6px; border-radius:6px; font-size:.9em; }
+    a { color:var(--accent); }
+    .browsers { font-size:.9rem; }
+    .badge { display:inline-block; background:#26262e; color:var(--muted); border-radius:999px;
+             padding:2px 10px; font-size:.78rem; margin-right:6px; }
+    footer { margin-top:40px; color:var(--muted); font-size:.85rem; text-align:center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="tag">M5Stack Cardputer · Claude</span>
+    <h1>Claudeputer Web Flasher</h1>
+    <p class="muted">Flash the firmware to your Cardputer directly from this page — no toolchain, no Arduino IDE. One image works on both the <strong>Cardputer 1.1</strong> and the <strong>Cardputer ADV</strong> (the board is auto-detected).</p>
+
+    <div class="card flash">
+      <esp-web-install-button manifest="./manifest.json">
+        <button slot="activate" style="font-size:1.05rem;padding:14px 26px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;font-weight:600;">⚡ Connect &amp; Install</button>
+        <span slot="unsupported">⚠️ Your browser can't flash over USB. Use desktop <strong>Chrome</strong> or <strong>Edge</strong>.</span>
+        <span slot="not-allowed">⚠️ This page must be served over HTTPS to flash.</span>
+      </esp-web-install-button>
+      <p class="browsers muted" style="margin-top:14px;">
+        <span class="badge">Chrome</span><span class="badge">Edge</span> desktop · Web Serial API required
+      </p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">How to flash</h3>
+      <ol>
+        <li>Plug the Cardputer into your computer with a USB-C cable.</li>
+        <li>Click <strong>Connect &amp; Install</strong> and pick the serial port
+            (<code>USB JTAG/serial</code> or <code>CP210x</code>/<code>CH9102</code>).</li>
+        <li>If nothing is detected, hold <strong>G0</strong> (the top button) while plugging in to enter download mode.</li>
+        <li>Wait for the install to finish, then the Cardputer reboots.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">First boot — on-device setup</h3>
+      <p>No secrets are baked into this firmware. On first boot the Cardputer shows a setup screen:</p>
+      <ol>
+        <li>Type your <strong>WiFi SSID</strong>, press <code>ENTER</code>.</li>
+        <li>Type your <strong>WiFi password</strong>, press <code>ENTER</code>.</li>
+        <li>Paste/type your <strong>Anthropic API key</strong> (<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get one here</a>), press <code>ENTER</code>.</li>
+      </ol>
+      <p class="muted">Settings are saved on the device (NVS). To reconfigure later, type <code>/setup</code> and press ENTER, or hold <strong>G0</strong> while powering on. Your key stays on the Cardputer and is sent only to <code>api.anthropic.com</code>.</p>
+    </div>
+
+    <footer>
+      Open source · <a href="https://github.com/poppnn/claudeputer">github.com/poppnn/claudeputer</a>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,80 @@
+name: Build firmware & deploy web flasher
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO & esptool
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio "esptool<5"
+
+      - name: Build firmware (universal — Cardputer 1.1 & ADV)
+        run: pio run -e cardputer
+
+      - name: Merge into a single flashable image
+        run: |
+          set -e
+          BUILD=.pio/build/cardputer
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
+          echo "boot_app0: $BOOT_APP0"
+          mkdir -p site/firmware
+          python -m esptool --chip esp32s3 merge_bin \
+            -o site/firmware/claudeputer-esp32s3.bin \
+            --flash_mode keep --flash_freq keep --flash_size 8MB \
+            0x0     "$BUILD/bootloader.bin" \
+            0x8000  "$BUILD/partitions.bin" \
+            0xe000  "$BOOT_APP0" \
+            0x10000 "$BUILD/firmware.bin"
+          ls -lh site/firmware
+
+      - name: Assemble web flasher site
+        run: |
+          cp webflasher/index.html    site/index.html
+          cp webflasher/manifest.json site/manifest.json
+          touch site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

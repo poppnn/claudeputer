@@ -1,10 +1,17 @@
 #pragma once
 // -----------------------------------------------------------------------------
-// Claudeputer configuration
+// Claudeputer configuration  (OPTIONAL)
 //
-// 1. Copy this file to "config.h"  (same folder)
-// 2. Fill in your WiFi credentials and Anthropic API key
-// 3. config.h is git-ignored, so your secrets never leave your machine
+// You do NOT need this file: the firmware can be configured on-device via the
+// setup screen (values are stored in NVS). This is the path the web flasher
+// uses. config.h is only a convenience to bake credentials in at compile time.
+//
+// To use it:
+//   1. Copy this file to "config.h"  (same folder)
+//   2. Fill in your WiFi credentials and Anthropic API key
+//   3. config.h is git-ignored, so your secrets never leave your machine
+//
+// Priority at runtime: on-device (NVS) values override these compile-time ones.
 // -----------------------------------------------------------------------------
 
 // --- WiFi ---

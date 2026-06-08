@@ -1,14 +1,21 @@
 // =============================================================================
 //  Claudeputer — talk to Claude from an M5Stack Cardputer over WiFi
 //
-//  Simple first version:
-//    - connects to WiFi
-//    - type a prompt on the Cardputer keyboard, press ENTER
-//    - the prompt is sent to the Anthropic Messages API
-//    - the reply is shown on screen, scrollable with the ; / . keys
-//    - press ` (backtick, top-left) to go back and type a new prompt
+//  Works on BOTH the Cardputer 1.1 and the Cardputer ADV: the M5Cardputer
+//  library (>= 1.2.0) auto-detects the board via M5.getBoard() and selects the
+//  right keyboard driver (IO-matrix on 1.1, TCA8418 on ADV). A single binary
+//  runs on either device.
 //
-//  Copy src/config.h.example -> src/config.h and fill in your secrets first.
+//  Configuration (WiFi + Anthropic API key) can come from:
+//    1. On-device setup screen  -> stored in NVS (Preferences)   [web-flash]
+//    2. Compile-time src/config.h (optional)                     [local build]
+//  NVS values take priority. If nothing is configured, the setup screen opens.
+//
+//  Controls:
+//    INPUT  : type, ENTER = send, DEL = backspace
+//             "/setup" + ENTER  -> reconfigure WiFi / API key
+//             "/reset" + ENTER  -> clear conversation history
+//    REPLY  : ; / .  scroll up/down, SPACE page down, `  back to input
 // =============================================================================
 
 #include <M5Cardputer.h>
@@ -16,45 +23,113 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <vector>
 
-#include "config.h"
+// config.h is optional (git-ignored). Without it we fall back to empty values
+// and the on-device setup screen handles configuration.
+#if __has_include("config.h")
+  #include "config.h"
+#endif
+#ifndef WIFI_SSID
+  #define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
+  #define WIFI_PASSWORD ""
+#endif
+#ifndef ANTHROPIC_API_KEY
+  #define ANTHROPIC_API_KEY ""
+#endif
+#ifndef CLAUDE_MODEL
+  #define CLAUDE_MODEL "claude-haiku-4-5"
+#endif
+#ifndef MAX_TOKENS
+  #define MAX_TOKENS 1024
+#endif
+#ifndef SYSTEM_PROMPT
+  #define SYSTEM_PROMPT "You are Claude running on a tiny M5Stack Cardputer with a 240x135 screen. Keep answers concise and plain-text. Avoid markdown tables and long code blocks."
+#endif
+#ifndef MAX_HISTORY_TURNS
+  #define MAX_HISTORY_TURNS 6
+#endif
 
 // ---- Layout constants (text size 1: ~6px wide, ~8px tall glyphs) ------------
-static const int   SCREEN_W     = 240;
-static const int   SCREEN_H     = 135;
-static const int   CHAR_W       = 6;
-static const int   LINE_H       = 9;     // glyph height + 1px spacing
-static const int   COLS         = SCREEN_W / CHAR_W;        // ~40 chars/line
-static const int   HEADER_H     = 12;
-static const int   BODY_ROWS    = (SCREEN_H - HEADER_H) / LINE_H;
+static const int   SCREEN_W   = 240;
+static const int   SCREEN_H   = 135;
+static const int   CHAR_W     = 6;
+static const int   LINE_H     = 9;
+static const int   COLS       = SCREEN_W / CHAR_W;        // ~40 chars/line
+static const int   HEADER_H   = 12;
+static const int   BODY_ROWS  = (SCREEN_H - HEADER_H) / LINE_H;
 
 // ---- Colours ----------------------------------------------------------------
 #define COL_BG      TFT_BLACK
-#define COL_HEADER  0x5AEB          // soft grey-blue
+#define COL_HEADER  0x5AEB
 #define COL_USER    TFT_GREENYELLOW
 #define COL_CLAUDE  TFT_WHITE
-#define COL_ACCENT  0xFD20          // orange (Claude-ish)
+#define COL_ACCENT  0xFD20
 #define COL_ERROR   TFT_RED
 
-// ---- Conversation state -----------------------------------------------------
-struct Turn {
-  String role;       // "user" or "assistant"
-  String content;
+// ---- Runtime configuration --------------------------------------------------
+Preferences g_prefs;
+struct AppConfig {
+  String ssid;
+  String pass;
+  String apiKey;
+  String model;
 };
+AppConfig g_cfg;
+
+void loadConfig() {
+  g_prefs.begin("claudeputer", true);                 // read-only
+  g_cfg.ssid   = g_prefs.getString("ssid",   WIFI_SSID);
+  g_cfg.pass   = g_prefs.getString("pass",   WIFI_PASSWORD);
+  g_cfg.apiKey = g_prefs.getString("apikey", ANTHROPIC_API_KEY);
+  g_cfg.model  = g_prefs.getString("model",  CLAUDE_MODEL);
+  g_prefs.end();
+}
+
+void saveConfig() {
+  g_prefs.begin("claudeputer", false);                // read-write
+  g_prefs.putString("ssid",   g_cfg.ssid);
+  g_prefs.putString("pass",   g_cfg.pass);
+  g_prefs.putString("apikey", g_cfg.apiKey);
+  g_prefs.putString("model",  g_cfg.model);
+  g_prefs.end();
+}
+
+bool configComplete() {
+  return g_cfg.ssid.length() > 0 && g_cfg.apiKey.length() > 0;
+}
+
+// ---- Conversation state -----------------------------------------------------
+struct Turn { String role; String content; };
 std::vector<Turn> g_history;
 
-String g_input;                    // current prompt being typed
-String g_lastReply;                // last assistant reply (for the viewer)
-int    g_scroll = 0;               // scroll offset (in wrapped lines)
+String g_input;
+String g_lastReply;
+int    g_scroll = 0;
 
-enum class Screen { INPUT, THINKING, VIEW, ERROR };
+// ---- Setup wizard state -----------------------------------------------------
+enum class Screen { SETUP, INPUT, THINKING, VIEW, ERROR };
 Screen g_screen = Screen::INPUT;
 
+int    g_setupField = 0;           // 0 = SSID, 1 = password, 2 = API key
+String g_setupBuf;
+static const char* SETUP_LABELS[3] = {"WiFi SSID", "WiFi password", "Anthropic API key"};
+
+const char* boardName() {
+  switch (M5.getBoard()) {
+    case m5::board_t::board_M5Cardputer:    return "Cardputer";
+    case m5::board_t::board_M5CardputerADV: return "Cardputer ADV";
+    default:                                return "ESP32-S3";
+  }
+}
+
 // =============================================================================
-//  Small UI helpers
+//  UI helpers
 // =============================================================================
-void drawHeader(const String& title, uint16_t color = COL_HEADER) {
+void drawHeader(const String& title, uint16_t color) {
   auto& d = M5Cardputer.Display;
   d.fillRect(0, 0, SCREEN_W, HEADER_H, COL_BG);
   d.setTextSize(1);
@@ -64,16 +139,13 @@ void drawHeader(const String& title, uint16_t color = COL_HEADER) {
   d.drawFastHLine(0, HEADER_H - 1, SCREEN_W, color);
 }
 
-// Wrap a string into display lines, honouring existing newlines.
 std::vector<String> wrapText(const String& text, int maxChars) {
   std::vector<String> lines;
-  String line;
-  String word;
+  String line, word;
 
   auto pushWord = [&]() {
     if (word.length() == 0) return;
     if (line.length() == 0) {
-      // very long word: hard-split it
       while ((int)word.length() > maxChars) {
         lines.push_back(word.substring(0, maxChars));
         word = word.substring(maxChars);
@@ -94,17 +166,10 @@ std::vector<String> wrapText(const String& text, int maxChars) {
 
   for (unsigned int i = 0; i < text.length(); i++) {
     char c = text[i];
-    if (c == '\n') {
-      pushWord();
-      lines.push_back(line);
-      line = "";
-    } else if (c == ' ') {
-      pushWord();
-    } else if (c == '\r') {
-      // ignore
-    } else {
-      word += c;
-    }
+    if (c == '\n')      { pushWord(); lines.push_back(line); line = ""; }
+    else if (c == ' ')  { pushWord(); }
+    else if (c == '\r') { /* ignore */ }
+    else                { word += c; }
   }
   pushWord();
   lines.push_back(line);
@@ -114,10 +179,32 @@ std::vector<String> wrapText(const String& text, int maxChars) {
 // =============================================================================
 //  Screen renderers
 // =============================================================================
+void renderSetup() {
+  auto& d = M5Cardputer.Display;
+  d.fillScreen(COL_BG);
+  String hdr = "Setup " + String(g_setupField + 1) + "/3  [ENTER] next";
+  drawHeader(hdr, COL_ACCENT);
+
+  d.setTextColor(COL_HEADER, COL_BG);
+  d.setCursor(2, HEADER_H + 4);
+  d.print(SETUP_LABELS[g_setupField]);
+  d.print(":");
+
+  d.setTextColor(COL_USER, COL_BG);
+  std::vector<String> lines = wrapText(g_setupBuf + "_", COLS);
+  int y = HEADER_H + 4 + LINE_H;
+  int start = max(0, (int)lines.size() - (BODY_ROWS - 2));
+  for (int i = start; i < (int)lines.size(); i++) {
+    d.setCursor(2, y);
+    d.print(lines[i]);
+    y += LINE_H;
+  }
+}
+
 void renderInput() {
   auto& d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("Claudeputer  [ENTER] send", COL_ACCENT);
+  drawHeader(String(boardName()) + "  [ENTER] send", COL_ACCENT);
 
   d.setTextColor(COL_USER, COL_BG);
   std::vector<String> lines = wrapText("> " + g_input, COLS);
@@ -149,8 +236,7 @@ void renderView() {
   if (g_scroll > maxScroll) g_scroll = maxScroll;
   if (g_scroll < 0) g_scroll = 0;
 
-  String hdr = "Claude  [;/.] scroll  [`] new";
-  drawHeader(hdr, COL_HEADER);
+  drawHeader("Claude  [;/.] scroll  [`] new", COL_HEADER);
 
   d.setTextColor(COL_CLAUDE, COL_BG);
   int y = HEADER_H + 2;
@@ -160,7 +246,6 @@ void renderView() {
     y += LINE_H;
   }
 
-  // tiny scrollbar
   if (maxScroll > 0) {
     int barH = max(6, (BODY_ROWS * (SCREEN_H - HEADER_H)) / total);
     int barY = HEADER_H + (g_scroll * (SCREEN_H - HEADER_H - barH)) / maxScroll;
@@ -183,25 +268,56 @@ void renderError(const String& msg) {
 }
 
 // =============================================================================
+//  Setup wizard
+// =============================================================================
+void startSetup() {
+  g_screen     = Screen::SETUP;
+  g_setupField = 0;
+  g_setupBuf   = g_cfg.ssid;          // prefill with current value
+  renderSetup();
+}
+
+void setupAdvance() {
+  // Store the current field, move to the next or finish.
+  switch (g_setupField) {
+    case 0: g_cfg.ssid   = g_setupBuf; break;
+    case 1: g_cfg.pass   = g_setupBuf; break;
+    case 2: g_cfg.apiKey = g_setupBuf; break;
+  }
+  g_setupField++;
+
+  if (g_setupField <= 2) {
+    g_setupBuf = (g_setupField == 1) ? g_cfg.pass : g_cfg.apiKey;
+    renderSetup();
+    return;
+  }
+
+  // Finished: persist and (re)connect.
+  saveConfig();
+  g_history.clear();
+}
+
+// =============================================================================
 //  WiFi
 // =============================================================================
 bool connectWiFi() {
   auto& d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("Claudeputer", COL_ACCENT);
+  drawHeader(String(boardName()), COL_ACCENT);
   d.setTextColor(COL_CLAUDE, COL_BG);
   d.setCursor(2, HEADER_H + 4);
   d.print("WiFi: ");
-  d.print(WIFI_SSID);
+  d.print(g_cfg.ssid);
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.disconnect(true);
+  WiFi.begin(g_cfg.ssid.c_str(), g_cfg.pass.c_str());
 
   int dots = 0;
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     M5Cardputer.update();
-    if (millis() - start > 20000) return false;   // 20s timeout
+    if (millis() - start > 20000) return false;
     d.setCursor(2, HEADER_H + 4 + LINE_H);
     d.print("Connecting");
     for (int i = 0; i < (dots % 4); i++) d.print(".");
@@ -221,11 +337,9 @@ bool connectWiFi() {
 // =============================================================================
 //  Anthropic API call
 // =============================================================================
-// Returns true on success; fills `out` with the reply text (or an error msg).
 bool askClaude(const String& prompt, String& out) {
-  // Build the messages array: history + new user turn.
   JsonDocument doc;
-  doc["model"]      = CLAUDE_MODEL;
+  doc["model"]      = g_cfg.model;
   doc["max_tokens"] = MAX_TOKENS;
   doc["system"]     = SYSTEM_PROMPT;
 
@@ -243,7 +357,7 @@ bool askClaude(const String& prompt, String& out) {
   serializeJson(doc, body);
 
   WiFiClientSecure client;
-  client.setInsecure();               // simple v1: skip cert validation
+  client.setInsecure();               // v1: skip cert validation
   client.setTimeout(20000);
 
   HTTPClient https;
@@ -253,7 +367,7 @@ bool askClaude(const String& prompt, String& out) {
     return false;
   }
   https.addHeader("content-type", "application/json");
-  https.addHeader("x-api-key", ANTHROPIC_API_KEY);
+  https.addHeader("x-api-key", g_cfg.apiKey);
   https.addHeader("anthropic-version", "2023-06-01");
 
   int code = https.POST(body);
@@ -273,12 +387,8 @@ bool askClaude(const String& prompt, String& out) {
 
   JsonDocument res;
   DeserializationError e = deserializeJson(res, resp);
-  if (e) {
-    out = String("JSON parse: ") + e.c_str();
-    return false;
-  }
+  if (e) { out = String("JSON parse: ") + e.c_str(); return false; }
 
-  // Concatenate all text content blocks.
   String text;
   for (JsonObject block : res["content"].as<JsonArray>()) {
     if (block["type"] == "text") text += block["text"].as<String>();
@@ -289,36 +399,47 @@ bool askClaude(const String& prompt, String& out) {
 }
 
 void trimHistory() {
-  // Keep the last MAX_HISTORY_TURNS*2 messages.
   int maxMsgs = MAX_HISTORY_TURNS * 2;
-  while ((int)g_history.size() > maxMsgs) {
-    g_history.erase(g_history.begin());
-  }
+  while ((int)g_history.size() > maxMsgs) g_history.erase(g_history.begin());
 }
 
 // =============================================================================
 //  Main flow
 // =============================================================================
+void goInput() {
+  g_screen = Screen::INPUT;
+  renderInput();
+}
+
 void submitPrompt() {
   String prompt = g_input;
   prompt.trim();
   if (prompt.length() == 0) return;
 
+  // Slash commands
+  if (prompt == "/setup") { g_input = ""; startSetup(); return; }
+  if (prompt == "/reset") {
+    g_history.clear();
+    g_input = "";
+    g_lastReply = "Conversation history cleared.";
+    g_scroll = 0;
+    g_screen = Screen::VIEW;
+    renderView();
+    return;
+  }
+
   g_screen = Screen::THINKING;
   renderThinking();
 
   String reply;
-  bool ok = askClaude(prompt, reply);
-
-  if (ok) {
+  if (askClaude(prompt, reply)) {
     g_history.push_back({"user", prompt});
     g_history.push_back({"assistant", reply});
     trimHistory();
-
-    g_input    = "";
+    g_input     = "";
     g_lastReply = reply;
-    g_scroll   = 0;
-    g_screen   = Screen::VIEW;
+    g_scroll    = 0;
+    g_screen    = Screen::VIEW;
     renderView();
   } else {
     g_screen = Screen::ERROR;
@@ -328,19 +449,28 @@ void submitPrompt() {
 
 void setup() {
   auto cfg = M5.config();
-  M5Cardputer.begin(cfg, true);          // true = init keyboard
+  M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextFont(&fonts::Font0);
 
-  if (!connectWiFi()) {
-    g_screen = Screen::ERROR;
-    renderError("WiFi connection failed. Check WIFI_SSID / WIFI_PASSWORD in config.h, then reset.");
-    return;
+  loadConfig();
+
+  // Hold the top (G0) button while powering on to force reconfiguration.
+  M5Cardputer.update();
+  bool forceSetup = M5Cardputer.BtnA.isPressed();
+
+  if (forceSetup || !configComplete()) {
+    startSetup();
+    return;          // setup loop() handles connecting afterwards
   }
 
-  g_screen = Screen::INPUT;
-  renderInput();
+  if (!connectWiFi()) {
+    g_screen = Screen::ERROR;
+    renderError("WiFi connection failed. Type /setup after this, or check credentials. [`] to continue.");
+    return;
+  }
+  goInput();
 }
 
 void loop() {
@@ -354,17 +484,25 @@ void loop() {
   Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
 
   switch (g_screen) {
-    case Screen::INPUT: {
+    case Screen::SETUP: {
       if (status.enter) {
-        submitPrompt();
+        setupAdvance();
+        if (g_setupField > 2) {            // wizard finished
+          if (connectWiFi()) goInput();
+          else { g_screen = Screen::ERROR; renderError("WiFi failed. Type /setup to retry. [`] continue."); }
+        }
         break;
       }
-      if (status.del && g_input.length() > 0) {
-        g_input.remove(g_input.length() - 1);
-      }
-      for (auto c : status.word) {
-        g_input += c;
-      }
+      if (status.del && g_setupBuf.length() > 0) g_setupBuf.remove(g_setupBuf.length() - 1);
+      for (auto c : status.word) g_setupBuf += c;
+      renderSetup();
+      break;
+    }
+
+    case Screen::INPUT: {
+      if (status.enter) { submitPrompt(); break; }
+      if (status.del && g_input.length() > 0) g_input.remove(g_input.length() - 1);
+      for (auto c : status.word) g_input += c;
       renderInput();
       break;
     }
@@ -372,27 +510,17 @@ void loop() {
     case Screen::VIEW: {
       bool changed = false;
       for (auto c : status.word) {
-        if (c == '`') {                 // back to input
-          g_screen = Screen::INPUT;
-          renderInput();
-          return;
-        }
-        if (c == ';') { g_scroll -= 1; changed = true; }   // up
-        if (c == '.') { g_scroll += 1; changed = true; }   // down
-        if (c == ' ') { g_scroll += BODY_ROWS - 1; changed = true; } // page down
+        if (c == '`') { goInput(); return; }
+        if (c == ';') { g_scroll -= 1; changed = true; }
+        if (c == '.') { g_scroll += 1; changed = true; }
+        if (c == ' ') { g_scroll += BODY_ROWS - 1; changed = true; }
       }
       if (changed) renderView();
       break;
     }
 
     case Screen::ERROR: {
-      for (auto c : status.word) {
-        if (c == '`') {
-          g_screen = Screen::INPUT;
-          renderInput();
-          return;
-        }
-      }
+      for (auto c : status.word) if (c == '`') { goInput(); return; }
       break;
     }
 
