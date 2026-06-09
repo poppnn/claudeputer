@@ -1,6 +1,6 @@
 {
   "name": "Claudeputer",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "home_assistant_domain": "",
   "new_install_prompt_erase": false,
   "builds": [

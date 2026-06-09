@@ -154,6 +154,49 @@ void saveConfig() {
 }
 bool configComplete() { return g_cfg.ssid.length() > 0 && g_cfg.apiKey.length() > 0; }
 
+// ---- Known WiFi networks (remembered passwords) -----------------------------
+// Stored as a JSON array in NVS so switching between known networks needs no
+// password re-entry. g_cfg.ssid/pass remain the "last used" (boot default).
+struct Known { String ssid, pass; };
+std::vector<Known> g_known;
+static const size_t MAX_KNOWN = 16;
+
+void loadKnown() {
+  g_known.clear();
+  g_prefs.begin("claudeputer", true);
+  String j = g_prefs.getString("wifis", "");
+  g_prefs.end();
+  if (!j.length()) return;
+  JsonDocument d;
+  if (deserializeJson(d, j) != DeserializationError::Ok) return;
+  for (JsonObject o : d.as<JsonArray>())
+    g_known.push_back({String((const char*)(o["s"] | "")), String((const char*)(o["p"] | ""))});
+}
+
+void saveKnown() {
+  JsonDocument d;
+  JsonArray a = d.to<JsonArray>();
+  for (auto& k : g_known) { JsonObject o = a.add<JsonObject>(); o["s"] = k.ssid; o["p"] = k.pass; }
+  String j;
+  serializeJson(d, j);
+  g_prefs.begin("claudeputer", false);
+  g_prefs.putString("wifis", j);
+  g_prefs.end();
+}
+
+String knownPass(const String& ssid) {
+  for (auto& k : g_known) if (k.ssid == ssid) return k.pass;
+  return "";
+}
+
+void rememberNetwork(const String& ssid, const String& pass) {
+  if (ssid.length() == 0) return;
+  for (auto& k : g_known) { if (k.ssid == ssid) { k.pass = pass; saveKnown(); return; } }
+  g_known.push_back({ssid, pass});
+  while (g_known.size() > MAX_KNOWN) g_known.erase(g_known.begin());
+  saveKnown();
+}
+
 // ---- Conversation -----------------------------------------------------------
 struct Msg { String role; String content; };   // role: user | assistant | error | info
 std::vector<Msg> g_msgs;
@@ -1073,6 +1116,32 @@ void finalizeSetup() {
   goChat();
 }
 
+// After a successful connection: remember the network, persist it as the boot
+// default, then either go to the API-key step (first run) or straight to chat.
+void afterConnect() {
+  rememberNetwork(g_cfg.ssid, g_cfg.pass);
+  saveConfig();
+  if (g_cfg.apiKey.length() > 0) {
+    addMessage("info", "Connected: " + g_cfg.ssid);   // keep the conversation
+    goChat();
+  } else {
+    startApi();
+  }
+}
+
+// Scan and auto-connect to the strongest known network in range.
+bool connectKnownNetworks() {
+  scanNetworks();
+  for (auto& n : g_nets) {
+    String p = knownPass(n.ssid);
+    if (p.length() == 0 && n.locked) continue;     // unknown locked network
+    g_cfg.ssid = n.ssid;
+    g_cfg.pass = p;
+    if (connectWiFi()) { saveConfig(); return true; }
+  }
+  return false;
+}
+
 // =============================================================================
 //  Main flow
 // =============================================================================
@@ -1116,13 +1185,18 @@ void setup() {
   canvas.setTextSize(1);
 
   loadConfig();
+  loadKnown();
 
   M5Cardputer.update();
   bool forceSetup = M5Cardputer.BtnA.isPressed();   // hold G0 at boot to reconfigure
 
   if (forceSetup || !configComplete()) { startSetup(); return; }
 
-  if (!connectWiFi()) { addMessage("error", "WiFi failed. Type /setup to reconfigure."); goChat(); return; }
+  // Try the last-used network; if it's out of range, auto-connect to any known
+  // network nearby (handy when you move between saved WiFis).
+  if (connectWiFi())            { goChat(); return; }
+  if (connectKnownNetworks())   { goChat(); return; }
+  addMessage("error", "No known WiFi in range. Type /setup.");
   goChat();
 }
 
@@ -1154,12 +1228,17 @@ void loop() {
     if (status.del) { scanNetworks(); renderScan(); return; }       // rescan
     if (status.enter && !g_nets.empty()) {
       g_selSsid = g_nets[g_netSel].ssid;
-      g_passBuf = "";
-      if (!g_nets[g_netSel].locked) {                               // open network: no password
+      String saved = knownPass(g_selSsid);
+      if (!g_nets[g_netSel].locked) {                               // open network
         g_cfg.ssid = g_selSsid; g_cfg.pass = "";
-        if (connectWiFi()) startApi();
+        if (connectWiFi()) afterConnect();
         else { renderCard("WiFi failed", "try again", C_ERR_TX); delay(1200); renderScan(); }
-      } else {
+      } else if (saved.length()) {                                 // known: no retype
+        g_cfg.ssid = g_selSsid; g_cfg.pass = saved;
+        if (connectWiFi()) afterConnect();
+        else { g_passBuf = saved; g_screen = Screen::Pass; renderPass(); }  // pwd changed -> edit
+      } else {                                                     // new: ask password
+        g_passBuf = "";
         g_screen = Screen::Pass; renderPass();
       }
       return;
@@ -1177,7 +1256,7 @@ void loop() {
   if (g_screen == Screen::Pass) {
     if (status.enter) {
       g_cfg.ssid = g_selSsid; g_cfg.pass = g_passBuf;
-      if (connectWiFi()) startApi();
+      if (connectWiFi()) afterConnect();
       else { renderCard("WiFi failed", "wrong password?", C_ERR_TX); delay(1200); renderPass(); }
       return;
     }

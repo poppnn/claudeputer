@@ -87,6 +87,12 @@ No secrets are embedded in the firmware. On first boot a 3-step setup appears:
 Settings are stored on the device (NVS) and survive reboots. The API key only
 ever leaves the device to reach `api.anthropic.com`.
 
+**Remembered networks:** every WiFi you connect to is saved (up to 16). When you
+move between known networks, just `/setup` → pick it from the list and it
+connects **without re-typing the password** (and skips the API-key step since
+it's already set). At boot, if your last network is out of range, the Cardputer
+auto-connects to any known network nearby.
+
 > The import form runs only during setup, on your local network, over plain
 > HTTP — fine for a trusted home network. To reconfigure later: type `/setup`
 > + `ENTER`, **or** hold **G0** while powering on.
