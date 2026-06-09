@@ -62,6 +62,20 @@
     </div>
 
     <div class="card">
+      <h3 style="margin-top:0;">Prefer M5Launcher / SD card? Download the .bin</h3>
+      <p class="muted">Grab the app binary and run it from <a href="https://github.com/bmorcelli/M5Launcher" target="_blank" rel="noopener">M5Launcher</a> (or M5Burner / OTA).</p>
+      <p style="text-align:center;margin:18px 0 8px;">
+        <a href="./firmware/claudeputer-app.bin" download
+           style="display:inline-block;padding:12px 22px;border-radius:10px;background:#26262e;color:#fff;text-decoration:none;font-weight:600;border:1px solid #3a3a44;">⬇️ claudeputer-app.bin</a>
+      </p>
+      <ol>
+        <li>Download <code>claudeputer-app.bin</code> above and copy it onto your Cardputer's microSD card.</li>
+        <li>Boot into <strong>M5Launcher</strong>, pick <code>claudeputer-app.bin</code> from the SD list, and load it.</li>
+      </ol>
+      <p class="muted" style="font-size:.82rem;">This is the <strong>application</strong> image (loads into the app slot at <code>0x10000</code>) — the right format for M5Launcher. The <em>Connect &amp; Install</em> button above uses a different, full-flash image. Both are the same firmware.</p>
+    </div>
+
+    <div class="card">
       <h3 style="margin-top:0;">First boot — on-device setup</h3>
       <p>No secrets are baked into this firmware. On first boot the Cardputer shows a 3-step setup:</p>
       <ol>

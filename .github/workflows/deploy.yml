@@ -48,6 +48,7 @@ jobs:
           BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
           echo "boot_app0: $BOOT_APP0"
           mkdir -p site/firmware
+          # Merged image for the web flasher / esptool (flash at offset 0x0).
           python -m esptool --chip esp32s3 merge_bin \
             -o site/firmware/claudeputer-esp32s3.bin \
             --flash_mode keep --flash_freq keep --flash_size 8MB \
@@ -55,6 +56,8 @@ jobs:
             0x8000  "$BUILD/partitions.bin" \
             0xe000  "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin"
+          # App-only image (for M5Launcher / OTA app slot, loads at 0x10000).
+          cp "$BUILD/firmware.bin" site/firmware/claudeputer-app.bin
           ls -lh site/firmware
 
       - name: Assemble web flasher site

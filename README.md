@@ -42,6 +42,14 @@ keyboard driver — so a single binary covers both.
    port. If nothing shows up, hold **G0** (top button) while plugging in.
 3. After flashing, the Cardputer boots into on-device setup (see below).
 
+### Option A2 — M5Launcher / SD card
+
+Prefer no cable? The web flasher also offers a **[`claudeputer-app.bin`](https://poppnn.github.io/claudeputer/firmware/claudeputer-app.bin)**
+download — the app image. Copy it to your microSD card and load it from
+[M5Launcher](https://github.com/bmorcelli/M5Launcher) (or M5Burner / OTA). Note
+this is the *application* binary (offset `0x10000`); the **Connect & Install**
+button uses a separate full-flash merged image — same firmware, different format.
+
 ### Option B — Build from source
 
 With [PlatformIO](https://platformio.org/) (VS Code extension):
